@@ -4,13 +4,15 @@
 
 #include "cxp.h"
 
-bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x)
+
+bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x, uint32_t initial_capacity)
 {
     x->size = 0;
-    x->capacity = ctx->precision;
-    x->digits = calloc(ctx->precision, sizeof(cxp_digit_t));
+    x->capacity = initial_capacity;
+    x->digits = calloc(initial_capacity, sizeof(cxp_digit_t));
     x->sign = 1;
     if (!x->digits) {
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", initial_capacity*sizeof(cxp_digit_t));
         return false;
     }
     return true;
@@ -18,12 +20,21 @@ bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x)
 
 bool cxp_initf(CXP_Ctx *ctx, CXP_Float *x)
 {
+    return cxp_initf_ex(ctx, x, ctx->precision);
+}
+
+bool cxp_initf_ex(CXP_Ctx *ctx, CXP_Float *x, uint32_t float_precision)
+{
     x->size = 0;
     x->capacity = ctx->precision;
     x->digits = calloc(ctx->precision, sizeof(cxp_digit_t));
     x->sign = 1;
     x->exponent = 0;
-    return false;
+    if (!x->digits) {
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", float_precision*sizeof(cxp_digit_t));
+        return false;
+    }
+    return true;
 }
 
 void cxp_throw(CXP_Ctx *ctx, CXP_ErrorCode err_code, const char *fmt, ...) {
