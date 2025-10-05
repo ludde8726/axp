@@ -16,6 +16,7 @@ bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x, uint32_t initial_capacity)
         cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", initial_capacity*sizeof(cxp_digit_t));
         return false;
     }
+    cxp_error_reset(ctx);
     return true;
 }
 
@@ -35,25 +36,28 @@ bool cxp_initf_ex(CXP_Ctx *ctx, CXP_Float *x, uint32_t precision)
         cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", precision*sizeof(cxp_digit_t));
         return false;
     }
+    cxp_error_reset(ctx);
     return true;
 }
 
-bool cxp_copyi(CXP_Ctx *ctx, CXP_Int *dst, CXP_Int *src)
+bool cxp_copyi(CXP_Ctx *ctx, CXP_Int *restrict dst, const CXP_Int *restrict src)
 {
+    CXP_ASSERT(!dst->digits);
     if (!cxp_initi(ctx, dst, dst->capacity)) return false; // Sets the capcity for us
     dst->size = src->size;
     dst->sign = src->sign;
     memcpy(dst->digits, src->digits, src->size*sizeof(cxp_digit_t));
-    return true;
+    return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
-bool cxp_copyf(CXP_Ctx *ctx, CXP_Float *dst, CXP_Float *src)
+bool cxp_copyf(CXP_Ctx *ctx, CXP_Float *restrict dst, const CXP_Float *restrict src)
 {
-    return cxp_copyf_ex(ctx, dst, src, ctx->precision);
+    return cxp_copyf_ex(ctx, dst, src, ctx->precision); // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
-bool cxp_copyf_ex(CXP_Ctx *ctx, CXP_Float *dst, CXP_Float *src, uint32_t precision)
+bool cxp_copyf_ex(CXP_Ctx *ctx, CXP_Float *restrict dst, const CXP_Float *restrict src, uint32_t precision)
 {
+    CXP_ASSERT(!dst->digits);
     if (!cxp_initf_ex(ctx, dst, precision)) return false; // Sets the capacity for us
     dst->sign = src->sign;
     dst->exponent = src->exponent;
@@ -64,17 +68,18 @@ bool cxp_copyf_ex(CXP_Ctx *ctx, CXP_Float *dst, CXP_Float *src, uint32_t precisi
     }
     memcpy(dst->digits, src->digits, src->size * sizeof(cxp_digit_t));
     dst->size = src->size;
-    return true;
+    return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
-bool cxp_copyf_exact(CXP_Ctx *ctx, CXP_Float *dst, CXP_Float *src)
+bool cxp_copyf_exact(CXP_Ctx *ctx, CXP_Float *restrict dst, const CXP_Float *restrict src)
 {
+    CXP_ASSERT(!dst->digits);
     if (!cxp_initf_ex(ctx, dst, src->capacity)) return false; // Sets the capacity for us
     dst->sign = src->sign;
     dst->exponent = src->exponent;
     dst->size = src->size;
     memcpy(dst->digits, src->digits, src->size * sizeof(cxp_digit_t));
-    return true;
+    return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
 void cxp_throw(CXP_Ctx *ctx, CXP_ErrorCode err_code, const char *fmt, ...) {
@@ -98,4 +103,10 @@ const char *cxp_error_str(const CXP_Ctx *ctx)
 {
     if (*(ctx->err_str)) return ctx->err_str;
     return cxp_error_messages[ctx->err];
+}
+
+void cxp_error_reset(CXP_Ctx *ctx)
+{
+    ctx->err = CXP_OK;
+    ctx->err_str[0] = '\0';
 }

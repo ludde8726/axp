@@ -11,7 +11,7 @@ ifeq ($(DEBUG),1)
 			-Wfloat-equal -Wshadow -Wfloat-conversion                       \
 			-std=c11 -pedantic										      \
 			-fsanitize=address,float-divide-by-zero,signed-integer-overflow \
-			-g
+			-g -DCXP_DEBUG_ASSERTS
 else
 	CFLAGS := -Wall -Wextra -Wconversion -Wsign-conversion -Wsign-compare     \
 			-Wfloat-equal -Wshadow -Wfloat-conversion                       \
