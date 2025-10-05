@@ -18,7 +18,13 @@ else
 			-std=c11 -pedantic -O2
 endif
 
-cxp: $(OBJ_DIR)/cxp.o | $(LIB_DIR)
+all: $(LIB_DIR)/libcxp.a
+
+test: $(LIB_DIR)/libcxp.a testing.c
+	$(CC) $(CFLAGS) -L$(LIB_DIR) -lcxp testing.c -o $(BIN_DIR)/testing
+	./$(BIN_DIR)/testing
+
+$(LIB_DIR)/libcxp.a: $(OBJ_DIR)/cxp.o | $(LIB_DIR)
 	ar rcs $(LIB_DIR)/libcxp.a $(OBJ_DIR)/cxp.o
 
 $(OBJ_DIR)/cxp.o: cxp.c cxp.h | $(OBJ_DIR)
