@@ -51,10 +51,13 @@ typedef struct {
     int64_t exponent;
 } CXP_Float;
 
-/* -- INIT FUNCTIONS -- */
+/* -- ALLOCATION FUNCTIONS -- */
 bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x, cxp_size_t initial_capacity);
 bool cxp_initf(CXP_Ctx *ctx, CXP_Float *x);
 bool cxp_initf_ex(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t precision);
+
+bool cxp_realloci(CXP_Ctx *ctx, CXP_Int *x, cxp_size_t size);
+bool cxp_reallocf(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t size);
 
 bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x);
 

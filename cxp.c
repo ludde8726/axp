@@ -14,7 +14,7 @@ bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x, cxp_size_t initial_capacity)
     x->digits = calloc(initial_capacity, sizeof(cxp_digit_t));
     x->sign = 0;
     if (!x->digits) {
-        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", initial_capacity*sizeof(cxp_digit_t));
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `cxp_initi`.", initial_capacity*sizeof(cxp_digit_t));
         return false;
     }
     cxp_error_reset(ctx);
@@ -34,10 +34,48 @@ bool cxp_initf_ex(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t precision)
     x->sign = 0;
     x->exponent = 0;
     if (!x->digits) {
-        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", precision*sizeof(cxp_digit_t));
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `cxp_initf_ex`.", precision*sizeof(cxp_digit_t));
         return false;
     }
     cxp_error_reset(ctx);
+    return true;
+}
+
+bool cxp_realloci(CXP_Ctx *ctx, CXP_Int *x, cxp_size_t size)
+{
+    if (size < x->size) {
+        cxp_size_t diff = x->size - size;
+        memmove(x->digits, x->digits + diff, size * sizeof(cxp_digit_t));
+        x->size = size;
+    }
+    
+    cxp_digit_t *new_digits = realloc(x->digits, size * sizeof(cxp_digit_t));
+    if (!new_digits) {
+        free(x->digits);
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `cxp_initf_ex`.", size*sizeof(cxp_digit_t));
+        return false;
+    }
+    x->digits = new_digits;
+    x->capacity = size;
+    return true;
+}
+
+bool cxp_reallocf(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t size)
+{
+    if (size < x->size) {
+        cxp_size_t diff = x->size - size;
+        memmove(x->digits, x->digits + diff, size * sizeof(cxp_digit_t));
+        x->size = size;
+    }
+    
+    cxp_digit_t *new_digits = realloc(x->digits, size * sizeof(cxp_digit_t));
+    if (!new_digits) {
+        free(x->digits);
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `cxp_initf_ex`.", size*sizeof(cxp_digit_t));
+        return false;
+    }
+    x->digits = new_digits;
+    x->capacity = size;
     return true;
 }
 
@@ -52,7 +90,7 @@ bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x)
     cxp_size_t allocated = 4;
     cxp_digit_t *res_digits = calloc(4, sizeof(cxp_digit_t));
     if (!res_digits) {
-        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", 1*sizeof(cxp_digit_t));
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `cxp_initi_from_str`.", allocated*sizeof(cxp_digit_t));
         return false;
     }
 
@@ -80,7 +118,7 @@ bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x)
             cxp_digit_t *tmp = realloc(res_digits, allocated*2*sizeof(cxp_digit_t));
             if (!tmp) {
                 free(res_digits);
-                cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", allocated*sizeof(cxp_digit_t));
+                cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `cxp_initi_from_str`.", allocated*sizeof(cxp_digit_t));
                 return false;
             }
             res_digits = tmp;
