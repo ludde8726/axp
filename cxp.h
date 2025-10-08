@@ -27,6 +27,7 @@ typedef enum {
     CXP_ERR_DIV_ZERO,
     CXP_ERR_OVERFLOW,
     CXP_ERR_ROUNDING,
+    CXP_ERR_PARSE,
 } CXP_ErrorCode;
 
 typedef struct {
@@ -54,6 +55,8 @@ typedef struct {
 bool cxp_initi(CXP_Ctx *ctx, CXP_Int *x, cxp_size_t initial_capacity);
 bool cxp_initf(CXP_Ctx *ctx, CXP_Float *x);
 bool cxp_initf_ex(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t precision);
+
+bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x);
 
 void cxp_freei(CXP_Int *x);
 void cxp_freef(CXP_Float *x);

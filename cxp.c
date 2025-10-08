@@ -2,6 +2,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "cxp.h"
 
@@ -37,6 +38,69 @@ bool cxp_initf_ex(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t precision)
         return false;
     }
     cxp_error_reset(ctx);
+    return true;
+}
+
+bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x)
+{
+    if (!str || !*str) {
+        cxp_throw(ctx, CXP_ERR_PARSE, "Could not parse empty string or null pointer as CXP_Int.");
+        return false;
+    }
+    uint8_t sign = 0;
+    cxp_size_t res_sz = 0;
+    cxp_size_t allocated = 4;
+    cxp_digit_t *res_digits = calloc(4, sizeof(cxp_digit_t));
+    if (!res_digits) {
+        cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", 1*sizeof(cxp_digit_t));
+        return false;
+    }
+
+    while(isspace(*str)) str++;
+
+    if (*str == '-') {
+        sign = 1;
+        str++;
+    }
+
+    while (*str) {
+        const char chr = *str;
+        if (isspace(chr)) {
+            str++;
+            continue;
+        }
+
+        if (!isdigit(chr)) {
+            cxp_throw(ctx, CXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", chr);
+            free(res_digits);
+            return false;
+        }
+
+        if (res_sz >= allocated) {
+            cxp_digit_t *tmp = realloc(res_digits, allocated*2*sizeof(cxp_digit_t));
+            if (!tmp) {
+                free(res_digits);
+                cxp_throw(ctx, CXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes.", allocated*sizeof(cxp_digit_t));
+                return false;
+            }
+            res_digits = tmp;
+            allocated *= 2;
+        }
+        printf("%d, %d\n", res_sz, allocated);
+        res_digits[res_sz++] = (cxp_digit_t)(chr - '0');
+        str++;
+    }
+
+    // Must be a better way to do this without reversing, but works for now
+    for (cxp_size_t i = 0; i < res_sz / 2; ++i) {
+        cxp_digit_t tmp = res_digits[i]; // Digit at index i from the left
+        res_digits[i] = res_digits[res_sz - 1 - i]; // Digit from index i from the right
+        res_digits[res_sz - 1 - i] = tmp; // Swap
+    }
+    x->sign = sign;
+    x->digits = res_digits;
+    x->size = res_sz;
+    x->capacity = allocated;
     return true;
 }
 
@@ -230,9 +294,9 @@ static const char *cxp_error_messages[] = {
     [CXP_ERR_ALLOC] = "Memory allocation failed",
     [CXP_ERR_DIV_ZERO] = "Division by zero",
     [CXP_ERR_OVERFLOW] = "Digit overflow",
-    [CXP_ERR_ROUNDING] = "Rounding error"
+    [CXP_ERR_ROUNDING] = "Rounding error",
+    [CXP_ERR_PARSE] = "Parsing error",
 };
-
 
 const char *cxp_strerror(const CXP_Ctx *ctx)
 {
