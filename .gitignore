@@ -3,3 +3,4 @@ testing.c
 *.dSYM
 .vscode/
 .DS_Store
+test_data.json

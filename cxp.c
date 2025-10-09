@@ -82,7 +82,7 @@ bool cxp_reallocf(CXP_Ctx *ctx, CXP_Float *x, cxp_size_t size)
 bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x)
 {
     if (!str || !*str) {
-        cxp_throw(ctx, CXP_ERR_PARSE, "Could not parse empty string or null pointer as CXP_Int.");
+        cxp_throw(ctx, CXP_ERR_PARSE, "Could not parse empty string or null pointer as integer.");
         return false;
     }
     uint8_t sign = 0;
