@@ -124,7 +124,6 @@ bool cxp_initi_from_str(CXP_Ctx *ctx, const char *str, CXP_Int *x)
             res_digits = tmp;
             allocated *= 2;
         }
-        printf("%d, %d\n", res_sz, allocated);
         res_digits[res_sz++] = (cxp_digit_t)(chr - '0');
         str++;
     }
@@ -254,8 +253,8 @@ bool cxp_addi(CXP_Ctx *ctx, const CXP_Int *x, const CXP_Int *y, CXP_Int *res)
             if (cmp == 0) return true;
             else if (cmp < 0) {
                 res_sign = 1;
-                larger = x;
-                smaller = y;
+                larger = y;
+                smaller = x;
             }
             cxp_size_t res_sz = cxp__sub_digits(larger->digits, larger->size, smaller->digits, smaller->size, res->digits);
             res->size = res_sz;
