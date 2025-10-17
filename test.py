@@ -11,7 +11,7 @@ TESTS_DIR = ROOT_DIR / "tests"
 BIN_DIR = ROOT_DIR / "build" / "bin"
 LIB_DIR = ROOT_DIR / "build" / "lib"
 DATA_FILE = TESTS_DIR / "test_data.json"
-LIB_NAME = "cxp"
+LIB_NAME = "axp"
 
 
 def find_c_files() -> Iterable[Path]: return sorted(TESTS_DIR.glob("*.c"))
@@ -33,7 +33,6 @@ def compile_test(source_path: Path) -> Path:
   ]
 
   print(f"Compiling {source_path.name} ...")
-  print(f"Compiling {cmd} ...")
   result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
   if result.returncode != 0:
     print(f"Compilation failed for {source_path.name}")

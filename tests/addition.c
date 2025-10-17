@@ -1,38 +1,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "cxp.h"
+#include "axp.h"
 
-void cxp_printi(CXP_Int *x) {
+void axp_printi(AXP_Int *x) {
     if (x->sign) printf("-");
-    for (cxp_size_t i = x->size; i > 0; i--) printf("%u", x->digits[i - 1]);
+    for (axp_size_t i = x->size; i > 0; i--) printf("%u", x->digits[i - 1]);
 }
 
-void add_from_str(CXP_Ctx *ctx, const char *x_str, const char *y_str) {
-    CXP_Int x;
-    if (!cxp_initi_from_str(ctx, x_str, &x)) {
-        fprintf(stderr, "ERROR: %s\n", cxp_strerror(&ctx));
+void add_from_str(AXP_Ctx *ctx, const char *x_str, const char *y_str) {
+    AXP_Int x;
+    if (!axp_initi_from_str(ctx, x_str, &x)) {
+        fprintf(stderr, "ERROR: %s\n", axp_strerror(ctx));
         exit(1);
     }
-    CXP_Int y;
-    if (!cxp_initi_from_str(ctx, y_str, &y)) {
-        fprintf(stderr, "ERROR: %s\n", cxp_strerror(&ctx));
+    AXP_Int y;
+    if (!axp_initi_from_str(ctx, y_str, &y)) {
+        fprintf(stderr, "ERROR: %s\n", axp_strerror(ctx));
         exit(1);
     }
-    CXP_Int res;
-    if (!cxp_addi(ctx, &x, &y, &res)) {
-        fprintf(stderr, "ERROR: %s\n", cxp_strerror(&ctx));
+    AXP_Int res;
+    if (!axp_addi(ctx, &x, &y, &res)) {
+        fprintf(stderr, "ERROR: %s\n", axp_strerror(ctx));
         exit(1);
     }
-    cxp_printi(&res);
+    axp_printi(&res);
     printf("\n");
-    cxp_freei(&x);
-    cxp_freei(&y);
-    cxp_freei(&res);
+    axp_freei(&x);
+    axp_freei(&y);
+    axp_freei(&res);
 }
 
 int main() {
-    CXP_Ctx ctx = {
+    AXP_Ctx ctx = {
         .precision = 16
     };
     add_from_str(&ctx, "1", "2");      // 3
@@ -45,8 +45,6 @@ int main() {
     add_from_str(&ctx, "-1", "-5");    // -6
     add_from_str(&ctx, "-10", "2");    // -8
     add_from_str(&ctx, "2", "-10");    // -8
-
-
 
     return 0;
 }
