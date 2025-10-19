@@ -11,9 +11,9 @@
 // 
 // ------- Helper functions -------
 
-// Some machines apparently has the byte size as something other than 8 bits?
-#define AXP_TYPE_MIN_VALUE(T)  (-( (T)1 << (sizeof(T)*CHAR_BIT - 1) ))
-#define AXP_TYPE_MAX_VALUE(T)  (  ((T)~AXP_TYPE_MIN_VALUE(T)) )
+// Some machines apparently has the byte size as something other than 8 bits and in that case we cannot use 2's compliment
+#define AXP_TYPE_MIN_VALUE(T)  (-( (T)1ULL << (sizeof(T)*CHAR_BIT - 1) ))
+#define AXP_TYPE_MAX_VALUE(T)  ((T)((1ULL << (sizeof(T)*CHAR_BIT - 1)) - 1)) // (  ((T)~AXP_TYPE_MIN_VALUE(T)) )
 
 // This will be needed for multiplication of floats later
 static bool axp_safe_add_int64_t(int64_t x, int64_t y, int64_t *res) {
@@ -99,8 +99,7 @@ bool axp_realloci(AXP_Ctx *ctx, AXP_Int *x, axp_size_t size)
     
     axp_digit_t *new_digits = realloc(x->digits, size * sizeof(axp_digit_t));
     if (!new_digits) {
-        free(x->digits);
-        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `axp_initf_ex`.", size*sizeof(axp_digit_t));
+        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `axp_realloci`.", size*sizeof(axp_digit_t));
         return false;
     }
     x->digits = new_digits;
@@ -118,8 +117,7 @@ bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size)
     
     axp_digit_t *new_digits = realloc(x->digits, size * sizeof(axp_digit_t));
     if (!new_digits) {
-        free(x->digits);
-        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `axp_initf_ex`.", size*sizeof(axp_digit_t));
+        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `axp_reallocf`.", size*sizeof(axp_digit_t));
         return false;
     }
     x->digits = new_digits;
@@ -263,6 +261,7 @@ axp_size_t axp__add_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const a
     axp_size_t max_sz = (x_sz > y_sz) ? x_sz : y_sz;
     for (axp_size_t i = 0; (i < max_sz) || carry; i++) {
         axp_digit_t sum = carry;
+        AXP_ASSERT(i <= max_sz);
         if (i < x_sz) sum += x_digits[i];
         if (i < y_sz) sum += y_digits[i];
         res[i] = sum % 10;
@@ -342,7 +341,7 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     if (!axp_initi(ctx, res, max_sz)) return false;
 
     if (x->sign != y->sign) {
-        // either (-x) - y or x - (-y) -> x + y 
+        // either (-x) - y or x - (-y)
         //      = -(x + y) or x + y
         axp_size_t res_sz = axp__add_digits(x->digits, x->size, y->digits, y->size, res->digits);
         res->size = res_sz;
@@ -363,7 +362,7 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     axp_size_t res_sz = axp__sub_digits(larger->digits, larger->size, smaller->digits, smaller->size, res->digits);
     res->size = res_sz;
     res->sign = res_sign;
-    return false;
+    return true;
 }
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) {
