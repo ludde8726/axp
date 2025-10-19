@@ -3,9 +3,57 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <limits.h>
 
 #include "axp.h"
 
+
+// 
+// ------- Helper functions -------
+
+// Some machines apparently has the byte size as something other than 8 bits?
+#define AXP_TYPE_MIN_VALUE(T)  (-( (T)1 << (sizeof(T)*CHAR_BIT - 1) ))
+#define AXP_TYPE_MAX_VALUE(T)  (  ((T)~AXP_TYPE_MIN_VALUE(T)) )
+
+// This will be needed for multiplication of floats later
+static bool axp_safe_add_int64_t(int64_t x, int64_t y, int64_t *res) {
+    int64_t min_val = AXP_TYPE_MIN_VALUE(int64_t);
+    int64_t max_val = AXP_TYPE_MAX_VALUE(int64_t);
+
+    if ((y > 0 && x > max_val - y) || (y < 0 && x < min_val - y)) return false;
+
+    *res = x + y;
+    return true;
+}
+
+// This will be needed for exponentiation of floats later
+static bool axp_safe_mul_int64_t(int64_t x, int64_t y, int64_t *res) {
+    if (x == 0 || y == 0) {
+        *res = 0;
+        return true;
+    }
+
+    int64_t min_val = AXP_TYPE_MIN_VALUE(int64_t);
+    int64_t max_val = AXP_TYPE_MAX_VALUE(int64_t);
+
+    if ((x == -1 && y == min_val) || (y == -1 && x == min_val)) {
+        return false;
+    }
+
+    if (x > 0) {
+        if (y > 0 && x > max_val / y) return false;
+        if (y < 0 && y < min_val / x) return false;
+    } else {
+        if (y > 0 && x < min_val / y) return false;
+        if (y < 0 && x < max_val / y) return false;
+    }
+
+    *res = x * y;
+    return true;
+
+}
+
+// ------- Allocation -------
 
 bool axp_initi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t initial_capacity)
 {
@@ -99,7 +147,7 @@ bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x)
     if (*str == '-') {
         sign = 1;
         str++;
-    }
+    } else if (*str == '+') str++;
 
     while (*str) {
         const char chr = *str;

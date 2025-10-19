@@ -27,6 +27,7 @@ test: $(LIB_DIR)/libaxp.a testing.c | $(BIN_DIR)
 clean:
 	rm -rf $(BUILD_DIR)
 
+# I know this is not necessary but i am doing it in case i need to add more files later on.
 $(LIB_DIR)/libaxp.a: $(OBJ_DIR)/axp.o | $(LIB_DIR)
 	ar rcs $(LIB_DIR)/libaxp.a $(OBJ_DIR)/axp.o
 
