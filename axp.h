@@ -17,6 +17,8 @@
 #define AXP_ASSERT(x)
 #endif
 
+#define BASE 10
+
 typedef uint8_t axp_digit_t;
 typedef uint32_t axp_size_t;
 typedef int64_t axp_exp_t;
@@ -28,6 +30,7 @@ typedef enum {
     AXP_ERR_OVERFLOW,
     AXP_ERR_ROUNDING,
     AXP_ERR_PARSE,
+    AXP_ERR_UNINITIALIZED,
 } AXP_ErrorCode;
 
 typedef struct {
@@ -93,8 +96,10 @@ bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *res
 
 /* COMPARISON */
 // Compares the absolute value of two `Cxp_Int`
-// Return: `1` if `x > y`, `0`if `x == y` and `-1` if `x < y`
-int axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y);
+// Sets res to: `1` if `x > y`, `0`if `x == y` and `-1` if `x < y`
+bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res);
+
+bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res);
 
 /* ADD FUNCTIONS */
 // Returns the size of `res`
@@ -104,6 +109,9 @@ bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
 // NOTE: Assumes that `x > y`
 axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
+
+axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
+bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) PRINTF_LIKE_WARNINGS(3, 4);
 const char *axp_strerror(const AXP_Ctx *ctx);

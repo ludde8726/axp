@@ -11,9 +11,11 @@
 // 
 // ------- Helper functions -------
 
-// Some machines apparently has the byte size as something other than 8 bits and in that case we cannot use 2's compliment
-#define AXP_TYPE_MIN_VALUE(T)  (-( (T)1ULL << (sizeof(T)*CHAR_BIT - 1) ))
-#define AXP_TYPE_MAX_VALUE(T)  ((T)((1ULL << (sizeof(T)*CHAR_BIT - 1)) - 1)) // (  ((T)~AXP_TYPE_MIN_VALUE(T)) )
+#define AXP_TYPE_MIN_VALUE(T) \
+    ( (T)(1ULL << (sizeof(T)*CHAR_BIT - 1)) )
+
+#define AXP_TYPE_MAX_VALUE(T) \
+    ( (T)~(T)(1ULL << (sizeof(T)*CHAR_BIT - 1)) )
 
 // This will be needed for multiplication of floats later
 static bool axp_safe_add_int64_t(int64_t x, int64_t y, int64_t *res) {
@@ -241,17 +243,42 @@ bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *res
     return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
-int axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y)
+bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res)
 {
-    // Maybe don't pass ctx to this function, however i like the consistancy.
-    (void)ctx;
-    if (x->size > y->size) return 1;
-    if (x->size < y->size) return -1;
-    for (axp_size_t i = x->size; i > 0; i--) {
-        if (x->digits[i-1] > y->digits[i-1]) return 1;
-        if (x->digits[i-1] < y->digits[i-1]) return -1;
+    if (!x->digits || !y->digits) {
+        axp_throw(ctx, AXP_ERR_UNINITIALIZED, "Cannot compare uninitalized integers.");
+        return false;
     }
-    return 0;
+
+    if (x->size > y->size) {
+        *res = 1;
+        return true;
+    }
+    if (x->size < y->size) {
+        *res = -1;
+        return true;
+    }
+    for (axp_size_t i = x->size; i > 0; i--) {
+        if (x->digits[i-1] > y->digits[i-1]) {
+            *res = 1;
+            return true;
+        }
+        if (x->digits[i-1] < y->digits[i-1]) {
+            *res = -1;
+            return true;
+        }
+    }
+    *res = 0;
+    return true;
+}
+
+bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res) {
+    if (!x->digits) {
+        axp_throw(ctx, AXP_ERR_UNINITIALIZED, "Cannot check value of uninitalized integer.");
+        return false;
+    }
+    *res = (x->size == 0 || ((x->size == 1) && (x->digits[0] == 0)));
+    return true;
 }
 
 axp_size_t axp__add_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res)
@@ -281,7 +308,11 @@ bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
             const AXP_Int *larger = y;
             const AXP_Int *smaller = x;
             axp_digit_t res_sign = 0;
-            int cmp = axp_abs_cmpi(ctx, y, x);
+            int cmp;
+            if (!axp_abs_cmpi(ctx, y, x, &cmp)) {
+                axp_freei(res);
+                return false;
+            }
             if (cmp == 0) return true;
             else if (cmp < 0) {
                 res_sign = 1;
@@ -296,7 +327,11 @@ bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
             const AXP_Int *larger = x;
             const AXP_Int *smaller = y;
             axp_digit_t res_sign = 0;
-            int cmp = axp_abs_cmpi(ctx, x, y);
+            int cmp;
+            if (!axp_abs_cmpi(ctx, x, y, &cmp)) {
+                axp_freei(res);
+                return false;
+            }
             if (cmp == 0) return true;
             else if (cmp < 0) {
                 res_sign = 1;
@@ -351,7 +386,11 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     const AXP_Int *larger = x;
     const AXP_Int *smaller = y;
     axp_digit_t res_sign = x->sign;
-    int cmp = axp_abs_cmpi(ctx, x, y);
+    int cmp;
+    if (!axp_abs_cmpi(ctx, x, y, &cmp)) {
+        axp_freei(res);
+        return false;
+    }
     if (cmp == 0) {
         return true;
     } else if (cmp < 0) {
@@ -362,6 +401,38 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     axp_size_t res_sz = axp__sub_digits(larger->digits, larger->size, smaller->digits, smaller->size, res->digits);
     res->size = res_sz;
     res->sign = res_sign;
+    return true;
+}
+
+axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res) {
+    axp_size_t i;
+    axp_size_t j;
+    for (i = 0; i < x_sz; i++) {
+        axp_digit_t carry = 0;
+        for (j = 0; j < y_sz || carry; j++) {
+            axp_digit_t product = res[i + j] + x_digits[i] * (j < y_sz ? y_digits[j] : 0) + carry;
+            res[i + j] = product % BASE;
+            carry = product / BASE;
+        }
+    }
+    return i + j - 1; // Result size is always the largest accessed index in res
+}
+
+bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res) {
+    bool x_zero, y_zero;
+    if (!(axp_is_zeroi(ctx, x, &x_zero) && axp_is_zeroi(ctx, y, &y_zero))) return false;
+    
+    if (x_zero || y_zero) {
+        if (!axp_initi(ctx, res, 1)) return false;
+        res->size = 1;
+        return true;
+    }
+
+    if (!axp_initi(ctx, res, x->size + y->size)) return false;
+    
+    axp_size_t res_sz = axp__mul_digits(x->digits, x->size, y->digits, y->size, res->digits);
+    res->size = res_sz;
+    res->sign = x->sign ^ y->sign;
     return true;
 }
 
