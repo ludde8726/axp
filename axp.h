@@ -73,6 +73,7 @@ void axp_freef(AXP_Float *x);
 // WARNING: Make sure that `src` and `dst` do NOT overlap!
 // Return: true on sucess and false on faliure and sets ctx->err accordingly
 bool axp_copyi(AXP_Ctx *ctx, AXP_Int *restrict dst, const AXP_Int *restrict src);
+bool axp_copyi_ex(AXP_Ctx *ctx, AXP_Int *restrict dst, const AXP_Int *restrict src, axp_size_t capacity);
 
 // Creates a copy of `src` into `dst` where `dst` is an unitialized `AXP_Float`
 // Note: This function will use the precision from the context, which may result in loss of precision.
@@ -98,8 +99,13 @@ bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *res
 // Compares the absolute value of two `Cxp_Int`
 // Sets res to: `1` if `x > y`, `0`if `x == y` and `-1` if `x < y`
 bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res);
-
 bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res);
+
+/* LOW LEVEL OPS */
+axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
+void axp_shli(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift);
+axp_size_t axp__shri_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
+void axp_shri(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift);
 
 /* ADD FUNCTIONS */
 // Returns the size of `res`
@@ -112,6 +118,9 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
 
 axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
+
+axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t *remainder_sz);
+bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AXP_Int *remainder);
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) PRINTF_LIKE_WARNINGS(3, 4);
 const char *axp_strerror(const AXP_Ctx *ctx);

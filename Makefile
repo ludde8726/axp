@@ -22,7 +22,7 @@ all: $(LIB_DIR)/libaxp.a
 
 test: $(LIB_DIR)/libaxp.a testing.c | $(BIN_DIR)
 	$(CC) $(CFLAGS) -L$(LIB_DIR) -laxp testing.c -o $(BIN_DIR)/testing
-	./$(BIN_DIR)/testing
+	MallocNanoZone=0 ./$(BIN_DIR)/testing
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -106,6 +106,7 @@ bool axp_realloci(AXP_Ctx *ctx, AXP_Int *x, axp_size_t size)
     }
     x->digits = new_digits;
     x->capacity = size;
+    axp_error_reset(ctx);
     return true;
 }
 
@@ -124,6 +125,7 @@ bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size)
     }
     x->digits = new_digits;
     x->capacity = size;
+    axp_error_reset(ctx);
     return true;
 }
 
@@ -186,6 +188,7 @@ bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x)
     x->digits = res_digits;
     x->size = res_sz;
     x->capacity = allocated;
+    axp_error_reset(ctx);
     return true;
 }
 
@@ -204,7 +207,17 @@ void axp_freef(AXP_Float *x)
 bool axp_copyi(AXP_Ctx *ctx, AXP_Int *restrict dst, const AXP_Int *restrict src)
 {
     AXP_ASSERT(!dst->digits);
-    if (!axp_initi(ctx, dst, dst->capacity)) return false; // Sets the capcity for us
+    if (!axp_initi(ctx, dst, src->capacity)) return false; // Sets the capcity for us
+    dst->size = src->size;
+    dst->sign = src->sign;
+    memcpy(dst->digits, src->digits, src->size*sizeof(axp_digit_t));
+    return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
+}
+
+bool axp_copyi_ex(AXP_Ctx *ctx, AXP_Int *restrict dst, const AXP_Int *restrict src, axp_size_t capacity)
+{
+    AXP_ASSERT(!dst->digits);
+    if (!axp_initi(ctx, dst, capacity)) return false; // Sets the capcity for us
     dst->size = src->size;
     dst->sign = src->sign;
     memcpy(dst->digits, src->digits, src->size*sizeof(axp_digit_t));
@@ -243,32 +256,24 @@ bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *res
     return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
-bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res)
-{
+int8_t axp__abs_cmpi_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz) {
+    if (x_sz > y_sz) return 1;
+    if (x_sz < y_sz) return -1;
+    for (axp_size_t i = x_sz; i > 0; i--) {
+        if (x_digits[i-1] > y_digits[i-1]) return 1;
+        if (x_digits[i-1] < y_digits[i-1]) return -1;
+    }
+    return 0;
+}
+
+bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res) {
     if (!x->digits || !y->digits) {
         axp_throw(ctx, AXP_ERR_UNINITIALIZED, "Cannot compare uninitalized integers.");
         return false;
     }
 
-    if (x->size > y->size) {
-        *res = 1;
-        return true;
-    }
-    if (x->size < y->size) {
-        *res = -1;
-        return true;
-    }
-    for (axp_size_t i = x->size; i > 0; i--) {
-        if (x->digits[i-1] > y->digits[i-1]) {
-            *res = 1;
-            return true;
-        }
-        if (x->digits[i-1] < y->digits[i-1]) {
-            *res = -1;
-            return true;
-        }
-    }
-    *res = 0;
+    *res = axp__abs_cmpi_digits(x->digits, x->size, y->digits, y->size);
+    axp_error_reset(ctx);
     return true;
 }
 
@@ -278,7 +283,62 @@ bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res) {
         return false;
     }
     *res = (x->size == 0 || ((x->size == 1) && (x->digits[0] == 0)));
+    axp_error_reset(ctx);
     return true;
+}
+
+axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift) {
+    if (x_sz == 0 || shift == 0) return x_sz;
+    memmove(x_digits + shift, x_digits, x_sz * sizeof(axp_digit_t));
+    memset(x_digits, 0, shift * sizeof(axp_digit_t));
+    return x_sz + shift;
+}
+
+void axp_shli(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift) {
+    (void) ctx;
+    if (x->size == 0 || shift == 0) return;
+    axp_size_t new_size = x->size + shift;
+
+    if (new_size > x->capacity) {
+        if (x->capacity <= shift) {
+            memset(x->digits, 0, x->capacity * sizeof(axp_digit_t));
+            return;
+        }
+        axp_size_t keep = x->capacity - shift;
+        memmove(x->digits + shift, x->digits + (x->size - keep), keep * sizeof(axp_digit_t));
+        memset(x->digits, 0, shift * sizeof(axp_digit_t));
+        x->size = x->capacity;
+        return;
+    }
+    memmove(x->digits + shift, x->digits, x->size * sizeof(axp_digit_t));
+    memset(x->digits, 0, shift * sizeof(axp_digit_t));
+    x->size = new_size;
+}
+
+axp_size_t axp__shri_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift) {
+    if (x_sz == 0 || shift == 0) return x_sz;
+
+    if (shift >= x_sz) {
+        memset(x_digits, 0, x_sz * sizeof(axp_digit_t));
+        return 1;
+    }
+    memmove(x_digits, x_digits + shift, (x_sz - shift) * sizeof(axp_digit_t));
+    memset(x_digits + (x_sz - shift), 0, shift * sizeof(axp_digit_t));
+    return x_sz - shift;
+}
+
+void axp_shri(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift) {
+    (void) ctx;
+    if (x->size == 0 || shift == 0) return;
+
+    if (shift >= x->size) {
+        x->size = 1;
+        memset(x->digits, 0, x->capacity * sizeof(axp_digit_t));
+        return;
+    }
+    memmove(x->digits, x->digits + shift, (x->size - shift) * sizeof(axp_digit_t));
+    memset(x->digits + (x->size - shift), 0, shift * sizeof(axp_digit_t));
+    x->size -= shift;
 }
 
 axp_size_t axp__add_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res)
@@ -366,7 +426,7 @@ axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const a
         AXP_ASSERT(diff >= 0 && diff < 10);
         res[i] = (axp_digit_t) diff;
     }
-    if (res[res_sz-1] == 0) return res_sz - 1;
+    while (res[res_sz-1] == 0) res_sz--;
     return res_sz;
 }
 
@@ -436,6 +496,69 @@ bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res) {
     return true;
 }
 
+axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t *remainder_sz) {
+    axp_size_t shift = x_sz - y_sz;
+    axp_size_t shifted_sz = axp__shli_digits(y_digits, y_sz, shift);
+    *remainder_sz = x_sz;
+    axp_size_t res_sz = 0;
+    bool first_access = false;
+
+    for (int64_t i = shift; i >= 0; i--) {
+        axp_size_t count = 0;
+        while (axp__abs_cmpi_digits(x_digits, *remainder_sz, y_digits, shifted_sz) >= 0) {
+            *remainder_sz = axp__sub_digits(x_digits, *remainder_sz, y_digits, shifted_sz, x_digits);
+            count++;
+        }
+        res[i] = (axp_digit_t) count;
+        if (first_access || (count != 0)) {
+            first_access = true;
+            res_sz++;
+        }
+        shifted_sz = axp__shri_digits(y_digits, shifted_sz, 1);
+    }
+    return res_sz;
+}
+
+bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AXP_Int *remainder) {
+    bool is_zero;
+    if (!axp_is_zeroi(ctx, y, &is_zero)) return false;
+    if (is_zero) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "Division by zero in `axp_divi`");
+        return false;
+    }
+
+    AXP_Int y_copy = { 0 };
+    AXP_Int x_copy = { 0 };
+    axp_size_t remainder_sz = x->size;
+    if (!axp_copyi_ex(ctx, &y_copy, y, x->size)) goto cleanup_error;
+    if (!axp_copyi(ctx, &x_copy, x)) goto cleanup_error;
+
+    if (!axp_initi(ctx, res, x->size)) goto cleanup_error;
+
+    int cmp;
+    if (!axp_abs_cmpi(ctx, x, y, &cmp)) goto cleanup_error;
+    if (cmp == -1) goto cleanup_success;
+
+    res->size = axp__div_digits(x_copy.digits, x_copy.size, y_copy.digits, y_copy.size, res->digits, &remainder_sz);
+    goto cleanup_success;
+cleanup_error:
+    axp_freei(&x_copy);
+    axp_freei(&y_copy);
+    axp_freei(res);
+    return false;
+cleanup_success:
+    // a = bq + r => a/b = q + r/b
+    res->sign = x->sign ^ y->sign;
+    if (remainder) {
+        *remainder = x_copy;
+        remainder->size = remainder_sz;
+        remainder->sign = x->sign;
+    }
+    else axp_freei(&x_copy);
+    axp_freei(&y_copy);
+    return true;
+}
+
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) {
     ctx->err = err_code;
     va_list args;
@@ -451,6 +574,7 @@ static const char *axp_error_messages[] = {
     [AXP_ERR_OVERFLOW] = "Digit overflow",
     [AXP_ERR_ROUNDING] = "Rounding error",
     [AXP_ERR_PARSE] = "Parsing error",
+    [AXP_ERR_UNINITIALIZED] = "Uninitialized number error"
 };
 
 const char *axp_strerror(const AXP_Ctx *ctx)
