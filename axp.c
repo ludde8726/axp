@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#include <math.h>
 
 #include "axp.h"
 
@@ -467,15 +468,18 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
 axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res) {
     axp_size_t i;
     axp_size_t j;
+    axp_size_t max_written = 0;
     for (i = 0; i < x_sz; i++) {
         axp_digit_t carry = 0;
         for (j = 0; j < y_sz || carry; j++) {
             axp_digit_t product = res[i + j] + x_digits[i] * (j < y_sz ? y_digits[j] : 0) + carry;
             res[i + j] = product % BASE;
             carry = product / BASE;
+
+            if (i + j > max_written) max_written = i + j;
         }
     }
-    return i + j - 1; // Result size is always the largest accessed index in res
+    return max_written + 1; // Result size is always the largest accessed index in res
 }
 
 bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res) {
@@ -557,6 +561,74 @@ cleanup_success:
     else axp_freei(&x_copy);
     axp_freei(&y_copy);
     return true;
+}
+
+// Calculate the res size (max) by y * x->size (always between y * (x->size - 1) + 1 and y * x->size)
+axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res) {
+    res[0] = 1;
+    axp_size_t res_sz = 1;
+    axp_size_t remainder = 0;
+    while (y != 0) {
+        remainder = y % 2;
+        y /= 2;
+
+        if (remainder) {
+            res_sz = axp__mul_digits(res, res_sz, x_digits, x_sz, tmp_buf);
+            memcpy(res, tmp_buf, res_sz * sizeof(axp_digit_t));
+            memset(tmp_buf, 0, res_sz * sizeof(axp_digit_t));
+        }
+        if (y != 0) {
+            x_sz = axp__mul_digits(x_digits, x_sz, x_digits, x_sz, tmp_buf);
+            memcpy(x_digits, tmp_buf, x_sz * sizeof(axp_digit_t));
+            memset(tmp_buf, 0, x_sz * sizeof(axp_digit_t));
+        }
+    }
+    return res_sz;
+}
+
+bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res) {
+    bool is_zero;
+    if (!axp_is_zeroi(ctx, x, &is_zero)) return false;
+    if (is_zero && ! (y == 0)) {
+        if (!axp_copyi(ctx, res, x)) return false;
+    } else if (y == 0) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "0^0 is undefined.");
+        return false;
+    }
+
+    if (y == 0) {
+        axp_initi(ctx, res, 1);
+        res->digits[0] = 1;
+        return true;
+    }
+
+    double logx = floor((y * (x->size - 1 + log10(x->digits[x->size - 1] + 1))));
+    
+    if (logx > (double)((axp_size_t)-1)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Integer overflow.");
+        return false;
+    }
+    
+    axp_size_t max_sz = (axp_size_t)logx + 1;
+    
+    AXP_Int tmp_buf;
+    AXP_Int x_copy = { 0 };
+    if (!axp_initi(ctx, res, max_sz)) goto cleanup_error;
+    if (!axp_initi(ctx, &tmp_buf, max_sz)) goto cleanup_error;
+    if (!axp_copyi_ex(ctx, &x_copy, x, max_sz)) goto cleanup_error;
+
+    res->size = axp__pow_digits(x_copy.digits, x_copy.size, y, tmp_buf.digits, res->digits);
+    res->sign = (y % 2) && x->sign;
+    axp_freei(&tmp_buf);
+    axp_freei(&x_copy);
+    axp_error_reset(ctx);
+    return true;
+
+cleanup_error:
+    axp_freei(res);
+    axp_freei(&tmp_buf);
+    axp_freei(&x_copy);
+    return false;
 }
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) {
