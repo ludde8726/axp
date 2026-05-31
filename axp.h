@@ -51,7 +51,7 @@ typedef struct {
     axp_size_t capacity;
     axp_digit_t *digits;
     uint8_t sign;
-    int64_t exponent;
+    axp_exp_t exponent;
 } AXP_Float;
 
 /* -- ALLOCATION FUNCTIONS -- */
@@ -63,6 +63,7 @@ bool axp_realloci(AXP_Ctx *ctx, AXP_Int *x, axp_size_t size);
 bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
 
 bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x);
+void axp_printi(const AXP_Int *x);
 
 void axp_freei(AXP_Int *x);
 void axp_freef(AXP_Float *x);
@@ -101,16 +102,21 @@ bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *res
 bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res);
 bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res);
 
+void axp_normalizef(AXP_Float *x);
+
 /* LOW LEVEL OPS */
 axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
 void axp_shli(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift);
 axp_size_t axp__shri_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
 void axp_shri(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift);
 
+void axp_align_float_digits(AXP_Float *x, AXP_Float *y);
+
 /* ADD FUNCTIONS */
 // Returns the size of `res`
 axp_size_t axp__add_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
+bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
 
 // NOTE: Assumes that `x > y`
 axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);

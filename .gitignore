@@ -5,3 +5,5 @@ testing.c
 .DS_Store
 test_data.json
 TODO
+test_runner.py
+from_arg.c

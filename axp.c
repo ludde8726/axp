@@ -79,7 +79,7 @@ bool axp_initf(AXP_Ctx *ctx, AXP_Float *x)
 
 bool axp_initf_ex(AXP_Ctx *ctx, AXP_Float *x, axp_size_t precision)
 {
-    x->size = 0;
+    x->size = 1;
     x->capacity = precision;
     x->digits = calloc(precision, sizeof(axp_digit_t));
     x->sign = 0;
@@ -193,6 +193,11 @@ bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x)
     return true;
 }
 
+void axp_printi(const AXP_Int *x) {
+    if (x->sign) printf("-");
+    for (axp_size_t i = x->size; i > 0; i--) printf("%u", x->digits[i - 1]);
+}
+
 void axp_freei(AXP_Int *x)
 {
     AXP_ASSERT(x->digits);
@@ -288,6 +293,17 @@ bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res) {
     return true;
 }
 
+void axp_normalizef(AXP_Float *x) {
+    while ((x->size > 1) && (x->digits[x->size-1] == 0)) x->size--;
+    axp_size_t needed_shift = 0;
+
+    while ((x->digits[needed_shift] == 0) && (x->size > 1)) needed_shift++;
+    if (needed_shift) {
+        x->size = axp__shri_digits(x->digits, x->size, needed_shift);
+        x->exponent += needed_shift;
+    }
+}
+
 axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift) {
     if (x_sz == 0 || shift == 0) return x_sz;
     memmove(x_digits + shift, x_digits, x_sz * sizeof(axp_digit_t));
@@ -340,6 +356,27 @@ void axp_shri(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift) {
     memmove(x->digits, x->digits + shift, (x->size - shift) * sizeof(axp_digit_t));
     memset(x->digits + (x->size - shift), 0, shift * sizeof(axp_digit_t));
     x->size -= shift;
+}
+
+void axp_align_float_digits(AXP_Float *x, AXP_Float *y) {
+    if (x->exponent == y->exponent) return;
+
+    if (x->exponent < y->exponent) {
+        AXP_Float *higher = y;
+        y = x;
+        x = higher;
+    }
+
+    axp_size_t needed_shift = (axp_size_t)(x->exponent - y->exponent);
+    axp_size_t available_left_space = x->capacity - x->size;
+    axp_size_t left_shift = (needed_shift > available_left_space) ? available_left_space : needed_shift;
+    x->size = axp__shli_digits(x->digits, x->size, left_shift);
+    x->exponent -= left_shift;
+    needed_shift -= left_shift;
+    if (needed_shift > 0) {
+        y->size = axp__shri_digits(y->digits, y->size, needed_shift);
+        y->exponent += needed_shift;
+    }
 }
 
 axp_size_t axp__add_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res)
@@ -413,6 +450,36 @@ bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     return true;
 }
 
+bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res) {
+    // This does not support differently signed operands
+    if (!axp_initf_ex(ctx, res, ctx->precision + 1)) return false;
+    AXP_Float x_cpy = { 0 };
+    AXP_Float y_cpy = { 0 };
+    if (!axp_copyf_ex(ctx, &x_cpy, x, ctx->precision + 1)) goto cleanup_error;
+    if (!axp_copyf_ex(ctx, &y_cpy, y, ctx->precision + 1)) goto cleanup_success;
+
+    axp_align_float_digits(&x_cpy, &y_cpy);
+
+    axp_size_t res_sz = axp__add_digits(x_cpy.digits, x_cpy.size, y_cpy.digits, y_cpy.size, res->digits);
+    res->size = res_sz;
+    res->exponent = x_cpy.exponent;
+    res->sign = x_cpy.sign;
+    axp_normalizef(res);
+    if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; // This has to be a rounded resize which is not yet implemented
+    
+    goto cleanup_success;
+
+cleanup_error:
+    axp_freef(res);
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return false;
+cleanup_success:
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return true;
+}
+
 axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res)
 {
     axp_digit_t borrow = 0;
@@ -433,7 +500,7 @@ axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const a
 
 bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
 {
-    axp_size_t max_sz = (x->size > y->size) ? x->size : y->size;
+    axp_size_t max_sz = ((x->size > y->size) ? x->size : y->size) + 1; // + 1 to handle the case for x - (-y) where the addition overflows the buffer
     if (!axp_initi(ctx, res, max_sz)) return false;
 
     if (x->sign != y->sign) {
