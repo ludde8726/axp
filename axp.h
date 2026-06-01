@@ -99,7 +99,7 @@ bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *res
 /* COMPARISON */
 // Compares the absolute value of two `Cxp_Int`
 // Sets res to: `1` if `x > y`, `0`if `x == y` and `-1` if `x < y`
-bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res);
+bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int8_t *res);
 bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res);
 
 void axp_normalizef(AXP_Float *x);
@@ -121,6 +121,7 @@ bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
 // NOTE: Assumes that `x > y`
 axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
+bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
 
 axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);

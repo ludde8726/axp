@@ -272,7 +272,7 @@ int8_t axp__abs_cmpi_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t 
     return 0;
 }
 
-bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int *res) {
+bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int8_t *res) {
     if (!x->digits || !y->digits) {
         axp_throw(ctx, AXP_ERR_UNINITIALIZED, "Cannot compare uninitalized integers.");
         return false;
@@ -401,48 +401,31 @@ bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     axp_size_t max_sz = (x->size > y->size) ? x->size + 1 : y->size + 1;
     if (!axp_initi(ctx, res, max_sz)) return false;
     if (x->sign != y->sign) {
+        const AXP_Int *larger = x;
+        const AXP_Int *smaller = y;
+        axp_digit_t res_sign = 0;
+
         if (x->sign) {
-            // This is quite repetetive, maybe refactor...
-            const AXP_Int *larger = y;
-            const AXP_Int *smaller = x;
-            axp_digit_t res_sign = 0;
-            int cmp;
-            if (!axp_abs_cmpi(ctx, y, x, &cmp)) {
-                axp_freei(res);
-                return false;
-            }
-            if (cmp == 0) return true;
-            else if (cmp < 0) {
-                res_sign = 1;
-                larger = x;
-                smaller = y;
-            }
-            axp_size_t res_sz = axp__sub_digits(larger->digits, larger->size, smaller->digits, smaller->size, res->digits);
-            res->size = res_sz;
-            res->sign = res_sign;
-            return true;
-        } else {
-            const AXP_Int *larger = x;
-            const AXP_Int *smaller = y;
-            axp_digit_t res_sign = 0;
-            int cmp;
-            if (!axp_abs_cmpi(ctx, x, y, &cmp)) {
-                axp_freei(res);
-                return false;
-            }
-            if (cmp == 0) return true;
-            else if (cmp < 0) {
-                res_sign = 1;
-                larger = y;
-                smaller = x;
-            }
-            axp_size_t res_sz = axp__sub_digits(larger->digits, larger->size, smaller->digits, smaller->size, res->digits);
-            res->size = res_sz;
-            res->sign = res_sign;
-            return true;
+            larger = y;
+            smaller = x;
         }
+        int8_t cmp;
+        if (!axp_abs_cmpi(ctx, larger, smaller, &cmp)) {
+            axp_freei(res);
+            return false;
+        }
+        if (cmp == 0) return true;
+        else if (cmp < 0) {
+            const AXP_Int *tmp = larger;
+            larger = smaller;
+            smaller = tmp;
+            res_sign = 1;
+        }
+        axp_size_t res_sz = axp__sub_digits(larger->digits, larger->size, smaller->digits, smaller->size, res->digits);
+        res->size = res_sz;
+        res->sign = res_sign;
+        return true;
     }
-    
     
     axp_size_t res_sz = axp__add_digits(x->digits, x->size, y->digits, y->size, res->digits);
     res->size = res_sz;
@@ -460,6 +443,35 @@ bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
 
     axp_align_float_digits(&x_cpy, &y_cpy);
 
+    if (x_cpy.sign != y_cpy.sign) {
+        AXP_Float larger = x_cpy;
+        AXP_Float smaller = y_cpy;
+        uint8_t res_sign = 0;
+
+        if (x_cpy.sign) {
+            larger = y_cpy;
+            smaller = x_cpy;
+        }
+
+        int8_t cmp = axp__abs_cmpi_digits(larger.digits, larger.size, smaller.digits, smaller.size);
+
+        if (cmp == 0) goto cleanup_success;
+        else if (cmp < 0) {
+            AXP_Float tmp = larger;
+            larger = smaller;
+            smaller = tmp;
+            res_sign = 1;
+        }
+        axp_size_t res_sz = axp__sub_digits(larger.digits, larger.size, smaller.digits, smaller.size, res->digits);
+        res->size = res_sz;
+        res->sign = res_sign;
+        res->exponent = x_cpy.exponent;
+        axp_normalizef(res);
+        
+        if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; // This has to be a rounded resize which is not yet implemented
+        goto cleanup_success;
+    }
+
     axp_size_t res_sz = axp__add_digits(x_cpy.digits, x_cpy.size, y_cpy.digits, y_cpy.size, res->digits);
     res->size = res_sz;
     res->exponent = x_cpy.exponent;
@@ -467,17 +479,15 @@ bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     axp_normalizef(res);
     if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; // This has to be a rounded resize which is not yet implemented
     
-    goto cleanup_success;
-
+cleanup_success:
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return true;
 cleanup_error:
     axp_freef(res);
     axp_freef(&x_cpy);
     axp_freef(&y_cpy);
     return false;
-cleanup_success:
-    axp_freef(&x_cpy);
-    axp_freef(&y_cpy);
-    return true;
 }
 
 axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res)
@@ -508,13 +518,13 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
         //      = -(x + y) or x + y
         axp_size_t res_sz = axp__add_digits(x->digits, x->size, y->digits, y->size, res->digits);
         res->size = res_sz;
-        if (x->sign) res->sign = 1; // is negative
+        res->sign = x->sign; // is negative
         return true;
     }
     const AXP_Int *larger = x;
     const AXP_Int *smaller = y;
     axp_digit_t res_sign = x->sign;
-    int cmp;
+    int8_t cmp;
     if (!axp_abs_cmpi(ctx, x, y, &cmp)) {
         axp_freei(res);
         return false;
@@ -530,6 +540,60 @@ bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
     res->size = res_sz;
     res->sign = res_sign;
     return true;
+}
+
+bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res) {
+    if (!axp_initf_ex(ctx, res, ctx->precision + 1)) return false;
+    AXP_Float x_cpy = { 0 };
+    AXP_Float y_cpy = { 0 };
+    if (!axp_copyf_ex(ctx, &x_cpy, x, ctx->precision + 1)) goto cleanup_error;
+    if (!axp_copyf_ex(ctx, &y_cpy, y, ctx->precision + 1)) goto cleanup_success;
+
+    axp_align_float_digits(&x_cpy, &y_cpy);
+
+    if (x_cpy.sign != y_cpy.sign) {
+        axp_size_t res_sz = axp__add_digits(x_cpy.digits, x_cpy.size, y_cpy.digits, y_cpy.size, res->digits);
+        res->exponent = x_cpy.exponent;
+        res->size = res_sz;
+        res->sign = x_cpy.sign;
+        res->exponent = x_cpy.exponent;
+        axp_normalizef(res);
+        if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; 
+        goto cleanup_success;
+    }
+
+    uint8_t res_sign = x_cpy.sign;
+
+    int8_t cmp = axp__abs_cmpi_digits(x_cpy.digits, x_cpy.size, y_cpy.digits, y_cpy.size);
+
+    AXP_Float larger = x_cpy;
+    AXP_Float smaller = y_cpy;
+
+    if (cmp == 0) goto cleanup_success;
+    else if (cmp < 0) {
+        larger = y_cpy;
+        smaller = x_cpy;
+        res_sign = 1 - res_sign; // Flip between 0 and 1
+    }
+
+    axp_size_t res_sz = axp__sub_digits(larger.digits, larger.size, smaller.digits, smaller.size, res->digits);
+    res->size = res_sz;
+    res->sign = res_sign;
+    res->exponent = x_cpy.exponent;
+    axp_normalizef(res);
+    
+    if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error;
+
+cleanup_success:
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return true;
+
+cleanup_error:
+    axp_freef(res);
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return false;
 }
 
 axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res) {
@@ -606,7 +670,7 @@ bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AX
 
     if (!axp_initi(ctx, res, x->size)) goto cleanup_error;
 
-    int cmp;
+    int8_t cmp;
     if (!axp_abs_cmpi(ctx, x, y, &cmp)) goto cleanup_error;
     if (cmp == -1) goto cleanup_success;
 
