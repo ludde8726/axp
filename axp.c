@@ -116,12 +116,26 @@ bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size)
     if (size < x->size) {
         axp_size_t diff = x->size - size;
         memmove(x->digits, x->digits + diff, size * sizeof(axp_digit_t));
+        x->exponent += diff;
         x->size = size;
     }
     
     axp_digit_t *new_digits = realloc(x->digits, size * sizeof(axp_digit_t));
     if (!new_digits) {
         axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `axp_reallocf`.", size*sizeof(axp_digit_t));
+        return false;
+    }
+    x->digits = new_digits;
+    x->capacity = size;
+    axp_error_reset(ctx);
+    return true;
+}
+
+bool axp_reallocf_round(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size) {
+    axp_roundf(x, size);
+    axp_digit_t *new_digits = realloc(x->digits, size * sizeof(axp_digit_t));
+    if (!new_digits) {
+        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not reallocate %lu bytes in `axp_reallocf_round`.", size*sizeof(axp_digit_t));
         return false;
     }
     x->digits = new_digits;
@@ -251,6 +265,41 @@ bool axp_copyf_ex(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *restri
     return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
+bool axp_copyf_ex_round(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *restrict src, axp_size_t precision) {
+    AXP_ASSERT(!dst->digits);
+    if (!axp_initf_ex(ctx, dst, precision)) return false; // Sets the capacity for us
+    dst->sign = src->sign;
+    dst->exponent = src->exponent;
+
+    if (precision < src->size) {
+        memcpy(dst->digits, src->digits + (src->size - precision), precision * sizeof(axp_digit_t));
+        dst->size = precision;
+
+        axp_size_t diff = src->size - precision;
+        if (src->digits[diff - 1] >= 5) {
+            axp_digit_t carry = 1;
+            for (axp_size_t i = 0; i < precision; i++) {
+                axp_digit_t sum = dst->digits[i] + carry;
+                dst->digits[i] = sum % 10;
+                carry = sum / 10;
+                if (!carry) break;
+            }
+            if (carry) {
+                memset(dst->digits, 0, precision * sizeof(axp_digit_t));
+                dst->digits[0] = 1;
+                dst->size = 1;
+                dst->exponent++;
+            }
+        }
+        dst->exponent += diff;
+        return true;
+   }
+
+    memcpy(dst->digits, src->digits, src->size * sizeof(axp_digit_t));
+    dst->size = src->size;
+    return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
+}
+
 bool axp_copyf_exact(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *restrict src)
 {
     AXP_ASSERT(!dst->digits);
@@ -302,6 +351,30 @@ void axp_normalizef(AXP_Float *x) {
         x->size = axp__shri_digits(x->digits, x->size, needed_shift);
         x->exponent += needed_shift;
     }
+}
+
+void axp_roundf(AXP_Float *x, axp_size_t significant_digits) {
+   if (significant_digits < x->size) {
+        axp_size_t diff = x->size - significant_digits;
+        if (x->digits[diff - 1] >= 5) {
+            axp_digit_t carry = 1;
+            for (axp_size_t i = diff; i < x->size; i++) {
+                axp_digit_t sum = x->digits[i] + carry;
+                x->digits[i] = sum % 10;
+                carry = sum / 10;
+                if (!carry) break;
+            }
+            if (carry) {
+                memset(x->digits + diff, 0, significant_digits * sizeof(axp_digit_t));
+                x->digits[0] = 1;
+                x->size = 1;
+                x->exponent++;
+            }
+        }
+        memmove(x->digits, x->digits + diff, significant_digits * sizeof(axp_digit_t));
+        x->exponent += diff;
+        x->size = significant_digits;
+   }
 }
 
 axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift) {
@@ -438,8 +511,8 @@ bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     if (!axp_initf_ex(ctx, res, ctx->precision + 1)) return false;
     AXP_Float x_cpy = { 0 };
     AXP_Float y_cpy = { 0 };
-    if (!axp_copyf_ex(ctx, &x_cpy, x, ctx->precision + 1)) goto cleanup_error;
-    if (!axp_copyf_ex(ctx, &y_cpy, y, ctx->precision + 1)) goto cleanup_success;
+    if (!axp_copyf_ex_round(ctx, &x_cpy, x, ctx->precision)) goto cleanup_error;
+    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision)) goto cleanup_success;
 
     axp_align_float_digits(&x_cpy, &y_cpy);
 
@@ -468,7 +541,7 @@ bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
         res->exponent = x_cpy.exponent;
         axp_normalizef(res);
         
-        if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; // This has to be a rounded resize which is not yet implemented
+        if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error;
         goto cleanup_success;
     }
 
@@ -477,8 +550,8 @@ bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     res->exponent = x_cpy.exponent;
     res->sign = x_cpy.sign;
     axp_normalizef(res);
-    if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; // This has to be a rounded resize which is not yet implemented
-    
+    if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error;
+
 cleanup_success:
     axp_freef(&x_cpy);
     axp_freef(&y_cpy);
@@ -546,8 +619,8 @@ bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     if (!axp_initf_ex(ctx, res, ctx->precision + 1)) return false;
     AXP_Float x_cpy = { 0 };
     AXP_Float y_cpy = { 0 };
-    if (!axp_copyf_ex(ctx, &x_cpy, x, ctx->precision + 1)) goto cleanup_error;
-    if (!axp_copyf_ex(ctx, &y_cpy, y, ctx->precision + 1)) goto cleanup_success;
+    if (!axp_copyf_ex_round(ctx, &x_cpy, x, ctx->precision)) goto cleanup_error;
+    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision)) goto cleanup_success;
 
     axp_align_float_digits(&x_cpy, &y_cpy);
 
@@ -558,7 +631,7 @@ bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
         res->sign = x_cpy.sign;
         res->exponent = x_cpy.exponent;
         axp_normalizef(res);
-        if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error; 
+        if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error; 
         goto cleanup_success;
     }
 
@@ -582,7 +655,7 @@ bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     res->exponent = x_cpy.exponent;
     axp_normalizef(res);
     
-    if (!axp_reallocf(ctx, res, ctx->precision)) goto cleanup_error;
+    if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error;
 
 cleanup_success:
     axp_freef(&x_cpy);
@@ -760,6 +833,67 @@ cleanup_error:
     axp_freei(&tmp_buf);
     axp_freei(&x_copy);
     return false;
+}
+
+size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
+    bool should_write = !(buf == NULL || buf_sz == 0);
+    size_t needed_space = 0;
+
+    if (x->size == 0 || ((x->size == 1) && (x->digits[0] == 0))) {
+        if (should_write) snprintf(buf, 4, "0.0");
+        needed_space = 4;
+        goto return_block;
+    } else if (x->exponent >= 0) {
+        needed_space = (size_t)x->exponent + 3; // space for .0\0
+        if (x->sign) needed_space++;
+        needed_space += x->size;
+        if (!should_write) return needed_space;
+        if (x->sign) *buf++ = '-';
+
+        for (axp_size_t i = x->size; i > 0; i--) {
+            *buf++ = '0' + x->digits[i-1];
+        }
+        memset(buf, '0', (size_t)x->exponent * sizeof(char));
+        buf += x->exponent;
+        *buf++ = '.';
+        *buf++ = '0';
+        *buf = '\0';
+        goto return_block;
+
+    } else if (x->size + x->exponent <= 0) {
+        size_t leading_zeroes = (size_t)llabs(x->size + x->exponent);
+        needed_space = leading_zeroes + 3; // 0. ... \0
+        if (x->sign) needed_space++;
+        needed_space += x->size;
+
+        if (!should_write) return needed_space;
+        if (x->sign) *buf++ = '-';
+        *buf++ = '0';
+        *buf++ = '.';
+
+        for (size_t i = 0; i < leading_zeroes; i++) *buf++ = '0';
+        for (axp_size_t i = x->size; i > 0; i--) *buf++ = '0' + x->digits[i-1];
+        *buf = '\0';
+        goto return_block;
+
+    } else {
+        needed_space = 2; // ... . ... \0
+        if (x->sign) needed_space++;
+        needed_space += x->size;
+
+        if (!should_write) return needed_space;
+
+        axp_size_t decimal_index = (axp_size_t)-x->exponent;
+
+        for (axp_size_t i = x->size; i > 0; i--) {
+            if (i == decimal_index) *buf++ = '.';
+            *buf++ = '0' + x->digits[i-1];
+        }
+        *buf = '\0';
+        goto return_block;
+    }
+return_block:
+    return needed_space;
 }
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) {

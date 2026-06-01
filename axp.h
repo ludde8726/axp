@@ -61,6 +61,7 @@ bool axp_initf_ex(AXP_Ctx *ctx, AXP_Float *x, axp_size_t precision);
 
 bool axp_realloci(AXP_Ctx *ctx, AXP_Int *x, axp_size_t size);
 bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
+bool axp_reallocf_round(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
 
 bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x);
 void axp_printi(const AXP_Int *x);
@@ -89,6 +90,7 @@ bool axp_copyf(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *restrict 
 // WARNING: Make sure that `src` and `dst` do NOT overlap!
 // Return: true on sucess and false on faliure and sets ctx->err accordingly
 bool axp_copyf_ex(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *restrict src, axp_size_t precision);
+bool axp_copyf_ex_round(AXP_Ctx *ctx, AXP_Float *restrict dst, const AXP_Float *restrict src, axp_size_t precision);
 // Creates a copy of `src` into `dst` where `dst` is an unitialized `AXP_Float`
 // Note: This function will create an exact copy of `src` and will not respect the currently set
 // precision in the context.
@@ -103,6 +105,8 @@ bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int8_t *res)
 bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res);
 
 void axp_normalizef(AXP_Float *x);
+
+void axp_roundf(AXP_Float *x, axp_size_t significant_digits);
 
 /* LOW LEVEL OPS */
 axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
@@ -131,6 +135,9 @@ bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AX
 
 axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res);
 bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
+
+// Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
+size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz);
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) PRINTF_LIKE_WARNINGS(3, 4);
 const char *axp_strerror(const AXP_Ctx *ctx);
