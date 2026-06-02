@@ -144,69 +144,6 @@ bool axp_reallocf_round(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size) {
     return true;
 }
 
-bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x)
-{
-    if (!str || !*str) {
-        axp_throw(ctx, AXP_ERR_PARSE, "Could not parse empty string or null pointer as integer.");
-        return false;
-    }
-    uint8_t sign = 0;
-    axp_size_t res_sz = 0;
-    axp_size_t allocated = 4;
-    axp_digit_t *res_digits = calloc(4, sizeof(axp_digit_t));
-    if (!res_digits) {
-        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_initi_from_str`.", allocated*sizeof(axp_digit_t));
-        return false;
-    }
-
-    while(isspace(*str)) str++;
-
-    if (*str == '-') {
-        sign = 1;
-        str++;
-    } else if (*str == '+') str++;
-
-    while (*str) {
-        const char chr = *str;
-        if (isspace(chr)) {
-            str++;
-            continue;
-        }
-
-        if (!isdigit(chr)) {
-            axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", chr);
-            free(res_digits);
-            return false;
-        }
-
-        if (res_sz >= allocated) {
-            axp_digit_t *tmp = realloc(res_digits, allocated*2*sizeof(axp_digit_t));
-            if (!tmp) {
-                free(res_digits);
-                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_initi_from_str`.", allocated*sizeof(axp_digit_t));
-                return false;
-            }
-            res_digits = tmp;
-            allocated *= 2;
-        }
-        res_digits[res_sz++] = (axp_digit_t)(chr - '0');
-        str++;
-    }
-
-    // Must be a better way to do this without reversing, but works for now
-    for (axp_size_t i = 0; i < res_sz / 2; ++i) {
-        axp_digit_t tmp = res_digits[i]; // Digit at index i from the left
-        res_digits[i] = res_digits[res_sz - 1 - i]; // Digit from index i from the right
-        res_digits[res_sz - 1 - i] = tmp; // Swap
-    }
-    x->sign = sign;
-    x->digits = res_digits;
-    x->size = res_sz;
-    x->capacity = allocated;
-    axp_error_reset(ctx);
-    return true;
-}
-
 void axp_printi(const AXP_Int *x) {
     if (x->sign) printf("-");
     for (axp_size_t i = x->size; i > 0; i--) printf("%u", x->digits[i - 1]);
@@ -835,6 +772,83 @@ cleanup_error:
     return false;
 }
 
+size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
+    bool should_write = !(buf == NULL || buf_sz == 0);
+    size_t needed_space = x->size + 1;
+    if (x->sign) needed_space++;
+    if (!should_write) return needed_space;
+
+    if (x->sign) *buf++ = '-';
+    for (axp_size_t i = x->size; i > 0; i--) {
+        *buf++ = '0' + x->digits[i-1];
+    }
+    *buf = '\0';
+    return needed_space;
+}
+
+bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x)
+{
+    if (!str || !*str) {
+        axp_throw(ctx, AXP_ERR_PARSE, "Could not parse empty string or null pointer as integer.");
+        return false;
+    }
+    uint8_t sign = 0;
+    axp_size_t res_sz = 0;
+    axp_size_t allocated = 4;
+    axp_digit_t *res_digits = calloc(4, sizeof(axp_digit_t));
+    if (!res_digits) {
+        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `atoi`.", allocated*sizeof(axp_digit_t));
+        return false;
+    }
+
+    while(isspace(*str)) str++;
+
+    if (*str == '-') {
+        sign = 1;
+        str++;
+    } else if (*str == '+') str++;
+
+    while (*str) {
+        const char chr = *str;
+        if (isspace(chr)) {
+            str++;
+            continue;
+        }
+
+        if (!isdigit(chr)) {
+            axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", chr);
+            free(res_digits);
+            return false;
+        }
+
+        if (res_sz >= allocated) {
+            axp_digit_t *tmp = realloc(res_digits, allocated*2*sizeof(axp_digit_t));
+            if (!tmp) {
+                free(res_digits);
+                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_atoi`.", allocated*sizeof(axp_digit_t));
+                return false;
+            }
+            res_digits = tmp;
+            allocated *= 2;
+        }
+        res_digits[res_sz++] = (axp_digit_t)(chr - '0');
+        str++;
+    }
+
+    // Must be a better way to do this without reversing, but works for now
+    for (axp_size_t i = 0; i < res_sz / 2; ++i) {
+        axp_digit_t tmp = res_digits[i]; // Digit at index i from the left
+        res_digits[i] = res_digits[res_sz - 1 - i]; // Digit from index i from the right
+        res_digits[res_sz - 1 - i] = tmp; // Swap
+    }
+    x->sign = sign;
+    x->digits = res_digits;
+    x->size = res_sz;
+    x->capacity = allocated;
+    axp_error_reset(ctx);
+    return true;
+}
+
 size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);
     size_t needed_space = 0;
@@ -894,6 +908,151 @@ size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
     }
 return_block:
     return needed_space;
+}
+
+bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
+    if (!str || !*str) {
+        axp_throw(ctx, AXP_ERR_PARSE, "Could not parse empty string or null pointer as float.");
+        return false;
+    }
+
+    if (!axp_initf(ctx, x)) return false;
+
+    axp_size_t precision = x->capacity;
+
+    while (isspace(*str)) str++;
+
+    uint8_t sign = 0;
+    if (*str == '-') { 
+        sign = 1; 
+        str++; 
+    } else if (*str == '+') str++;
+
+    const char *scan = str;
+    const char *start = NULL;
+    bool leading = true;
+    bool truncated = false;
+
+
+    int64_t digit_count = 0;
+    int64_t dot_pos = -1;
+    int64_t zeroes_after_dot = 0;
+
+    axp_size_t res_sz = 0;
+    axp_digit_t first_dropped = 0;
+
+    while (*scan && *scan != 'e' && *scan != 'E') {
+        if (*scan == '.') {
+            if (dot_pos != -1) {
+                axp_throw(ctx, AXP_ERR_PARSE, "Multiple decimal points in float string.");
+                axp_freef(x);
+                return false;
+            }
+            if (!start) start = scan;
+            dot_pos = digit_count;
+        } else if (!start) {
+            if (*scan == '0') scan++;
+            else if(isdigit(*scan)) {
+                start = scan;
+                digit_count++;
+                scan++;
+            } else if (isspace(*scan)) scan++;
+            else {
+                axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", *scan);
+                axp_freef(x);
+                return false;
+            }
+            continue;
+        } else if (isdigit(*scan)) digit_count++;
+        else if (!isspace(*scan)) {
+            axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", *scan);
+            axp_freef(x);
+            return false;
+        }
+        scan++;
+    }
+    if (digit_count == 0) {
+        axp_throw(ctx, AXP_ERR_PARSE, "No digits found in float string.");
+        axp_freef(x);
+        return false;
+    }
+    if (dot_pos == -1) dot_pos = digit_count;
+
+    axp_exp_t str_exp = 0;
+    if (*scan == 'e' || *scan == 'E') {
+        scan++;
+        int8_t exp_sign = 1;
+        if (*scan == '-') { 
+            exp_sign = -1; 
+            scan++; 
+        } else if (*scan == '+') scan++;
+
+        if (!isdigit(*scan)) {
+            axp_throw(ctx, AXP_ERR_PARSE, "Expected exponent digits after 'e'/'E'.");
+            axp_freef(x);
+            return false;
+        }
+        while (isdigit(*scan)) str_exp = str_exp * 10 + (*scan++ - '0');
+        str_exp *= exp_sign;
+    }
+
+
+    
+
+    while (*start && *start != 'e' && *start != 'E') {
+        const char chr = *start++;
+
+        if (isspace(chr)) continue;
+        if (chr == '.')  continue;
+        if (!isdigit(chr)) {
+            axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", chr);
+            axp_freef(x);
+            return false;
+        }
+        axp_digit_t d = (axp_digit_t)(chr - '0');
+        if (leading && d == 0) {
+            zeroes_after_dot += 1;
+            continue;
+        }
+        leading = false;
+
+        if (res_sz < precision) {
+            x->digits[precision - res_sz - 1] = d;
+            res_sz++;
+        } else {
+            if (!truncated) {
+                first_dropped = d;
+                truncated = true;
+            }
+        }
+    }
+
+    if (res_sz < precision) memmove(x->digits, x->digits + (precision - res_sz), res_sz * sizeof(axp_digit_t));
+
+    if (truncated && first_dropped >= 5 && res_sz > 0) {
+        axp_size_t i = 0;
+        axp_digit_t carry = 1;
+        while (i < res_sz) {
+            axp_digit_t sum = x->digits[i] + carry;
+            x->digits[i] = sum % 10;
+            carry = sum / 10;
+            if (!carry) break;
+            i++;
+        }
+        if (carry) {
+            memset(x->digits, 0, precision * sizeof(axp_digit_t));
+            x->digits[0] = 1;
+            dot_pos++;
+            res_sz = 1;
+        }
+    }
+
+    x->sign = sign;
+    x->size = res_sz;
+    x->exponent = -digit_count + dot_pos + str_exp;
+    if (truncated) x->exponent += (digit_count - res_sz) - zeroes_after_dot;
+    axp_error_reset(ctx);
+    return true;
 }
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) {

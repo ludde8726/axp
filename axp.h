@@ -63,7 +63,6 @@ bool axp_realloci(AXP_Ctx *ctx, AXP_Int *x, axp_size_t size);
 bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
 bool axp_reallocf_round(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
 
-bool axp_initi_from_str(AXP_Ctx *ctx, const char *str, AXP_Int *x);
 void axp_printi(const AXP_Int *x);
 
 void axp_freei(AXP_Int *x);
@@ -137,7 +136,11 @@ axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y,
 bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
 
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
+size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);
+bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x);
+
 size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz);
+bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x);
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) PRINTF_LIKE_WARNINGS(3, 4);
 const char *axp_strerror(const AXP_Ctx *ctx);
