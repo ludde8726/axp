@@ -21,17 +21,6 @@
 #define AXP_TYPE_MAX_VALUE(T) \
     ( (T)~(T)(1ULL << (sizeof(T)*CHAR_BIT - 1)) )
 
-// This will be needed for multiplication of floats later
-static bool axp_safe_add_int64_t(int64_t x, int64_t y, int64_t *res) {
-    int64_t min_val = AXP_TYPE_MIN_VALUE(int64_t);
-    int64_t max_val = AXP_TYPE_MAX_VALUE(int64_t);
-
-    if ((y > 0 && x > max_val - y) || (y < 0 && x < min_val - y)) return false;
-
-    *res = x + y;
-    return true;
-}
-
 // This will be needed for exponentiation of floats later
 static bool axp_safe_mul_int64_t(int64_t x, int64_t y, int64_t *res) {
     if (x == 0 || y == 0) {
@@ -272,15 +261,30 @@ bool axp_abs_cmpi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, int8_t *res)
     return true;
 }
 
+bool axp__is_zero_digits(const axp_digit_t *x, axp_size_t x_sz) {
+    return (x_sz == 0 || ((x_sz == 1) && (x[0] == 0)));
+}
+
 bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res) {
     if (!x->digits) {
         axp_throw(ctx, AXP_ERR_UNINITIALIZED, "Cannot check value of uninitalized integer.");
         return false;
     }
-    *res = (x->size == 0 || ((x->size == 1) && (x->digits[0] == 0)));
+    *res = axp__is_zero_digits(x->digits, x->size);
     axp_error_reset(ctx);
     return true;
 }
+
+bool axp_is_zerof(AXP_Ctx *ctx, const AXP_Float *x, bool *res) {
+    if (!x->digits) {
+        axp_throw(ctx, AXP_ERR_UNINITIALIZED, "Cannot check value of uninitalized float.");
+        return false;
+    }
+    *res = axp__is_zero_digits(x->digits, x->size);
+    axp_error_reset(ctx);
+    return true;
+}
+
 
 void axp_normalizef(AXP_Float *x) {
     while ((x->size > 1) && (x->digits[x->size-1] == 0)) x->size--;
@@ -447,12 +451,11 @@ bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res)
 }
 
 bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res) {
-    // This does not support differently signed operands
     if (!axp_initf_ex(ctx, res, ctx->precision + 1)) return false;
     AXP_Float x_cpy = { 0 };
     AXP_Float y_cpy = { 0 };
     if (!axp_copyf_ex_round(ctx, &x_cpy, x, ctx->precision)) goto cleanup_error;
-    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision)) goto cleanup_success;
+    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision)) goto cleanup_error;
 
     axp_align_float_digits(&x_cpy, &y_cpy);
 
@@ -517,7 +520,7 @@ axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const a
         AXP_ASSERT(diff >= 0 && diff < 10);
         res[i] = (axp_digit_t) diff;
     }
-    while (res[res_sz-1] == 0) res_sz--;
+    while (res_sz && res[res_sz-1] == 0) res_sz--;
     return res_sz;
 }
 
@@ -560,7 +563,7 @@ bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     AXP_Float x_cpy = { 0 };
     AXP_Float y_cpy = { 0 };
     if (!axp_copyf_ex_round(ctx, &x_cpy, x, ctx->precision)) goto cleanup_error;
-    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision)) goto cleanup_success;
+    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision)) goto cleanup_error;
 
     axp_align_float_digits(&x_cpy, &y_cpy);
 
@@ -644,6 +647,46 @@ bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res) {
     return true;
 }
 
+bool axp_mulf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res) {
+    bool x_zero, y_zero;
+    if (!(axp_is_zerof(ctx, x, &x_zero) && axp_is_zerof(ctx, y, &y_zero))) return false;
+    if (x_zero || y_zero) {
+        if (!axp_initf_ex(ctx, res, ctx->precision)) return false;
+        res->size = 1;
+        return true;
+    }
+
+    if (!axp_initf_ex(ctx, res, ctx->precision * 2 + 2)) return false;
+    AXP_Float x_cpy = { 0 };
+    AXP_Float y_cpy = { 0 };
+    if (!axp_copyf_ex_round(ctx, &x_cpy, x, ctx->precision + 1)) goto cleanup_error;
+    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision + 1)) goto cleanup_error;
+
+    axp_size_t res_sz = axp__mul_digits(x_cpy.digits, x_cpy.size, y_cpy.digits, y_cpy.size, res->digits);
+    res->size = res_sz;
+    res->sign = x->sign ^ y->sign;
+    // Exponent overflow check
+    if ((y->exponent > 0 && x->exponent > AXP_TYPE_MAX_VALUE(axp_exp_t) - y->exponent) ||
+        (y->exponent < 0 && x->exponent < AXP_TYPE_MIN_VALUE(axp_exp_t) - y->exponent)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow (%lld + %lld)", x->exponent, y->exponent);
+        goto cleanup_error;
+    }
+
+    res->exponent = x->exponent + y->exponent;
+    axp_normalizef(res);
+    if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error;
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    axp_error_reset(ctx);
+    return true;
+
+cleanup_error:
+    axp_freef(res);
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return false;
+}
+
 axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t *remainder_sz) {
     axp_size_t shift = x_sz - y_sz;
     axp_size_t shifted_sz = axp__shli_digits(y_digits, y_sz, shift);
@@ -664,6 +707,44 @@ axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *
         }
         shifted_sz = axp__shri_digits(y_digits, shifted_sz, 1);
     }
+    return res_sz;
+}
+
+axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t max_prec, axp_exp_t *exp_adjust) {
+    axp_size_t res_sz = 0;
+    
+    if (x_sz >= y_sz) {
+        axp_size_t shift = x_sz - y_sz;
+        y_sz = axp__shli_digits(y_digits, y_sz, shift);
+        *exp_adjust = (axp_exp_t)shift;
+    } else {
+        axp_size_t shift = y_sz - x_sz;
+        x_sz = axp__shli_digits(x_digits, x_sz, shift);
+        *exp_adjust = -(axp_exp_t)shift;
+    }
+    bool first_access = false;
+
+    while (res_sz < max_prec) {
+        if (axp__is_zero_digits(x_digits, x_sz)) {
+            memmove(res, res + (max_prec - res_sz), res_sz * sizeof(axp_digit_t));
+            break;
+        }
+        axp_size_t count = 0;
+
+        while (axp__abs_cmpi_digits(x_digits, x_sz, y_digits, y_sz) >= 0) {
+            x_sz = axp__sub_digits(x_digits, x_sz, y_digits, y_sz, x_digits);
+            count++;
+        }
+
+        res[max_prec - res_sz - 1] = (axp_digit_t) count;
+        if (first_access || (count != 0)) {
+            first_access = true;
+            res_sz++;
+        }
+        (*exp_adjust)--;
+        x_sz = axp__shli_digits(x_digits, x_sz, 1);
+    }
+    (*exp_adjust)++; // Don't know why but this works...
     return res_sz;
 }
 
@@ -704,7 +785,61 @@ cleanup_success:
     }
     else axp_freei(&x_copy);
     axp_freei(&y_copy);
+    axp_error_reset(ctx);
     return true;
+}
+
+bool axp_divf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res) {
+    bool x_zero, y_zero;
+    if (!(axp_is_zerof(ctx, x, &x_zero) && axp_is_zerof(ctx, y, &y_zero))) return false;
+    if (x_zero) {
+        if (!axp_initf_ex(ctx, res, ctx->precision)) return false;
+        res->size = 1;
+        return true;
+    } else if (y_zero) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "Division by zero in `axp_divf`");
+        return false;
+    }
+
+    if (!axp_initf_ex(ctx, res, ctx->precision + 1)) return false;
+    AXP_Float x_cpy = { 0 };
+    AXP_Float y_cpy = { 0 };
+    if (!axp_copyf_ex_round(ctx, &x_cpy, x, ctx->precision + 1)) goto cleanup_error;
+    if (!axp_copyf_ex_round(ctx, &y_cpy, y, ctx->precision + 1)) goto cleanup_error;
+
+    axp_exp_t exp_adjust;
+
+    axp_size_t res_sz = axp__div_digits_float(x_cpy.digits, x_cpy.size, y_cpy.digits, y_cpy.size, res->digits, ctx->precision + 1, &exp_adjust);
+    res->size = res_sz;
+    res->sign = x->sign ^ y->sign;
+    // Exponent overflow check
+    if ((y->exponent < 0 && x->exponent > AXP_TYPE_MAX_VALUE(axp_exp_t) + y->exponent) ||
+        (y->exponent > 0 && x->exponent < AXP_TYPE_MIN_VALUE(axp_exp_t) + y->exponent)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow (%lld - %lld)", x->exponent, y->exponent);
+        goto cleanup_error;
+    }
+    res->exponent = x->exponent - y->exponent;
+
+    if ((exp_adjust > 0 && res->exponent > AXP_TYPE_MAX_VALUE(axp_exp_t) - exp_adjust) ||
+        (exp_adjust < 0 && res->exponent < AXP_TYPE_MIN_VALUE(axp_exp_t) - exp_adjust)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow (%lld + %lld)", res->exponent, exp_adjust);
+        goto cleanup_error;
+    }
+
+    res->exponent += exp_adjust;
+    axp_normalizef(res);
+    if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error;
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    axp_error_reset(ctx);
+    return true;
+
+cleanup_error:
+    axp_freef(res);
+    axp_freef(&x_cpy);
+    axp_freef(&y_cpy);
+    return false;
+    return false;
 }
 
 // Calculate the res size (max) by y * x->size (always between y * (x->size - 1) + 1 and y * x->size)
@@ -937,6 +1072,7 @@ char *axp_ftoa_alloc(AXP_Ctx *ctx, AXP_Float *x) {
     return buf;
 }
 
+// TODO: Parsing just '0' fails.
 bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
     if (!str || !*str) {
         axp_throw(ctx, AXP_ERR_PARSE, "Could not parse empty string or null pointer as float.");

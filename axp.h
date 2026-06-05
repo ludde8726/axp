@@ -153,9 +153,12 @@ bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
 
 axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
+bool axp_mulf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
 
 axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t *remainder_sz);
+axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t max_prec, axp_exp_t *exp_adjust);
 bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AXP_Int *remainder);
+bool axp_divf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
 
 axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res);
 bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
