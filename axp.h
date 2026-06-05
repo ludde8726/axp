@@ -13,8 +13,10 @@
 #ifdef AXP_DEBUG_ASSERTS
 #include <assert.h>
 #define AXP_ASSERT(x) assert(x)
+#define UNREACHABLE(x) assert(0 && x);
 #else
 #define AXP_ASSERT(x)
+#define UNREACHABLE(x)
 #endif
 
 #define BASE 10
@@ -31,6 +33,8 @@ typedef enum {
     AXP_ERR_ROUNDING,
     AXP_ERR_PARSE,
     AXP_ERR_UNINITIALIZED,
+    AXP_ERR_FORMAT,
+    AXP_ERR_WRITE,
 } AXP_ErrorCode;
 
 typedef struct {
@@ -53,6 +57,27 @@ typedef struct {
     uint8_t sign;
     axp_exp_t exponent;
 } AXP_Float;
+
+typedef int (*axp__print_writer_fn)(AXP_Ctx *, void *, const char *, size_t, int *);
+
+typedef enum {
+    AXP__TARGET_BUF,
+    AXP__TARGET_FD,
+} axp__target_type;
+
+typedef struct {
+    axp__target_type type;
+    axp__print_writer_fn write_fn;
+
+    union {
+        FILE *fd;
+        struct {
+            char *buf;
+            size_t buf_sz;
+        };
+    } as;
+    
+} axp__print_target;
 
 /* -- ALLOCATION FUNCTIONS -- */
 bool axp_initi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t initial_capacity);
@@ -137,13 +162,22 @@ bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
 
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);
+char *axp_itoa_alloc(AXP_Ctx *ctx, AXP_Int *x);
 bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x);
 
 size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz);
+char *axp_ftoa_alloc(AXP_Ctx *ctx, AXP_Float *x);
 bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x);
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) PRINTF_LIKE_WARNINGS(3, 4);
 const char *axp_strerror(const AXP_Ctx *ctx);
 void axp_error_reset(AXP_Ctx *ctx);
 
+int axp__printf_core(AXP_Ctx *ctx, axp__print_target *target, const char *fmt, va_list *args);
+
+int axp_vsnprintf(AXP_Ctx *ctx, char *buf, size_t buf_sz, const char *fmt, va_list *args);
+int axp_vfprintf(AXP_Ctx *ctx, FILE *stream, const char *fmt, va_list *args);
+int axp_snprintf(AXP_Ctx *ctx, char *buf, size_t buf_sz, const char *fmt, ...);
+int axp_fprintf(AXP_Ctx *ctx, FILE *stream, const char *fmt, ...);
+int axp_printf(AXP_Ctx *ctx, const char *fmt, ...);
 #endif // _AXP_H

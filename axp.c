@@ -5,6 +5,9 @@
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
+#include <stddef.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include "axp.h"
 
@@ -786,6 +789,18 @@ size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
     return needed_space;
 }
 
+char *axp_itoa_alloc(AXP_Ctx *ctx, AXP_Int *x) {
+    size_t needed_space = axp_itoa(x, NULL, 0);
+    char *buf = malloc(needed_space * sizeof(char));
+    if (!buf) {
+        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_itoa_alloc`.", needed_space*sizeof(char));
+        return NULL;
+    }
+    axp_itoa(x, buf, needed_space);
+    axp_error_reset(ctx);
+    return buf;
+}
+
 bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x)
 {
     if (!str || !*str) {
@@ -910,6 +925,18 @@ return_block:
     return needed_space;
 }
 
+char *axp_ftoa_alloc(AXP_Ctx *ctx, AXP_Float *x) {
+    size_t needed_space = axp_ftoa(x, NULL, 0);
+    char *buf = malloc(needed_space * sizeof(char));
+    if (!buf) {
+        axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_ftoa_alloc`.", needed_space*sizeof(char));
+        return NULL;
+    }
+    axp_ftoa(x, buf, needed_space);
+    axp_error_reset(ctx);
+    return buf;
+}
+
 bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
     if (!str || !*str) {
         axp_throw(ctx, AXP_ERR_PARSE, "Could not parse empty string or null pointer as float.");
@@ -996,9 +1023,6 @@ bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
         str_exp *= exp_sign;
     }
 
-
-    
-
     while (*start && *start != 'e' && *start != 'E') {
         const char chr = *start++;
 
@@ -1070,7 +1094,9 @@ static const char *axp_error_messages[] = {
     [AXP_ERR_OVERFLOW] = "Digit overflow",
     [AXP_ERR_ROUNDING] = "Rounding error",
     [AXP_ERR_PARSE] = "Parsing error",
-    [AXP_ERR_UNINITIALIZED] = "Uninitialized number error"
+    [AXP_ERR_UNINITIALIZED] = "Uninitialized number error",
+    [AXP_ERR_FORMAT] = "Format error",
+    [AXP_ERR_WRITE] = "Writing error",
 };
 
 const char *axp_strerror(const AXP_Ctx *ctx)
@@ -1083,4 +1109,326 @@ void axp_error_reset(AXP_Ctx *ctx)
 {
     ctx->err = AXP_OK;
     ctx->err_str[0] = '\0';
+}
+
+int axp__printf_core(AXP_Ctx *ctx, axp__print_target *target, const char *fmt, va_list *args) {
+    if (target->type == AXP__TARGET_BUF) {
+        if (!(target->as.buf && target->as.buf_sz)) {
+            target->as.buf = NULL;
+            target->as.buf_sz = 0;
+        }
+    } else if (target->type == AXP__TARGET_FD) {
+        if (!target->as.fd) {
+            axp_throw(ctx, AXP_ERR_WRITE, "Cannot write to null stream");
+            return -1;
+        }
+    } else UNREACHABLE("target type");
+
+    int out_pos = 0;
+    bool write_failed = false;
+
+    #define _WRITE_STR(src, len) do {                                                       \
+        int written = target->write_fn(ctx, &target->as, (src), (size_t)(len), &out_pos);   \
+        if (written < 0) write_failed = true;                                               \
+        else write_failed = false;                                                          \
+    } while (0)
+
+    #define _WRITE_FMT_SPEC(...) do {                                                                       \
+        int _needed_buf_len = (int)snprintf(NULL, 0, spec_fmt_str, __VA_ARGS__);                            \
+        if (_needed_buf_len < 0) {                                                                          \
+            axp_throw(ctx, AXP_ERR_PARSE,                                                                   \
+                           "Could not parse format string %s.",                                             \
+                           spec_fmt_str                                                                     \
+            );                                                                                              \
+            return -1;                                                                                      \
+        }                                                                                                   \
+        char *_tmp_buf = malloc((size_t)(_needed_buf_len + 1) * sizeof(char));                              \
+        if (!_tmp_buf) {                                                                                    \
+            axp_throw(ctx, AXP_ERR_ALLOC,                                                                   \
+                           "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", \
+                           (uint32_t)_needed_buf_len*sizeof(char));                                         \
+            return -1;                                                                                      \
+        }                                                                                                   \
+        int _actually_written = snprintf(_tmp_buf, (size_t)_needed_buf_len + 1, spec_fmt_str, __VA_ARGS__); \
+        AXP_ASSERT(_actually_written == _needed_buf_len);                                                   \
+        _WRITE_STR(_tmp_buf, _needed_buf_len);                                                            \
+        free(_tmp_buf);                                                                                     \
+        if (write_failed) return -1;                                                                        \
+    } while (0)
+
+    #define _RENDER_FMT_SPEC(type) do {                              \
+        if (has_star_width && has_star_prec) {                          \
+            type _argument = va_arg(*args, type);                       \
+            _WRITE_FMT_SPEC(star_width, star_prec, _argument);          \
+        } else if (has_star_width) {                                    \
+            type _argument = va_arg(*args, type);                       \
+            _WRITE_FMT_SPEC(star_width, _argument);                     \
+        } else if (has_star_prec) {                                     \
+            type _argument = va_arg(*args, type);                       \
+            _WRITE_FMT_SPEC(star_prec, _argument);                      \
+        } else {                                                        \
+            type _argument = va_arg(*args, type);                       \
+            _WRITE_FMT_SPEC(_argument);                                 \
+        }                                                               \
+    } while (0)
+    const char *chr = fmt;
+
+    while (*chr) {
+        if (*chr != '%') {
+            const char *txt_start = chr;
+            while (*chr && *chr != '%') chr++;
+            _WRITE_STR(txt_start, chr - txt_start);
+            if (write_failed) return -1;
+            continue;
+        }
+
+        const char *fmt_start = chr;
+        chr++;
+
+        if (*chr == '%') {
+            _WRITE_STR(chr, 1);
+            if (write_failed) return -1;
+            chr++;
+
+            continue;
+        }
+
+        if (*chr == 'Z') {
+            AXP_Int arg = va_arg(*args, AXP_Int);
+            size_t needed_space = axp_itoa(&arg, NULL, 0);
+            char *tmp_buf = malloc(needed_space * sizeof(char));
+            if (!tmp_buf) {
+                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", needed_space*sizeof(char));
+                return -1;
+            }
+            axp_itoa(&arg, tmp_buf, needed_space);
+            _WRITE_STR(tmp_buf, needed_space - 1);
+            free(tmp_buf);
+            if (write_failed) return -1;
+            chr++;
+            continue;
+        } else if (*chr == 'R') {
+            AXP_Float arg = va_arg(*args, AXP_Float);
+            size_t needed_space = axp_ftoa(&arg, NULL, 0);
+            char *tmp_buf = malloc(needed_space * sizeof(char));
+            if (!tmp_buf) {
+                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", needed_space*sizeof(char));
+                return -1;
+            }
+            axp_ftoa(&arg, tmp_buf, needed_space);
+            _WRITE_STR(tmp_buf, needed_space - 1);
+            free(tmp_buf);
+            if (write_failed) return -1;
+            chr++;
+            continue;
+        }
+        
+        int has_star_width = 0;
+        int star_width = 0;
+
+        int has_star_prec = 0;
+        int star_prec;
+
+        while (*chr == '-' || *chr == '+' || *chr == ' ' || *chr == '#' || *chr == '0') chr++;
+        
+        if (*chr == '*') {
+            has_star_width = 1;
+            star_width = va_arg(*args, int);
+            chr++;
+        } else {
+            while (isdigit(*chr)) chr++;
+        }
+
+        if (*chr == '.') {
+            chr++;
+            if (*chr == '*') {
+                has_star_prec = 1;
+                star_prec = va_arg(*args, int);
+                chr++;
+            } else {
+                while (isdigit(*chr)) chr++;
+            }
+        }
+        
+        enum {
+            LEN_NONE, LEN_HH, LEN_H, LEN_L, LEN_LL,
+            LEN_J, LEN_Z, LEN_T, LEN_CAP_L
+        } len = LEN_NONE;
+
+        if (chr[0] == 'h' && chr[1] == 'h')         { len = LEN_HH; chr += 2; }
+        else if (chr[0] == 'h')                     { len = LEN_H; chr++; }
+        else if (chr[0] == 'l' && chr[1] == 'l')    { len = LEN_LL; chr += 2; }
+        else if (chr[0] == 'l')                     { len = LEN_L; chr++; }
+        else if (chr[0] == 'j')                     { len = LEN_J; chr++; }
+        else if (chr[0] == 'z')                     { len = LEN_Z; chr++; }
+        else if (chr[0] == 't')                     { len = LEN_T; chr++; }
+        else if (chr[0] == 'L')                     { len = LEN_CAP_L; chr++; }
+
+        char spec = *chr++;
+
+        size_t spec_len = (size_t)(chr - fmt_start);
+        char *spec_fmt_str = malloc((spec_len + 1) * sizeof(char));
+        memcpy(spec_fmt_str, fmt_start, (spec_len + 1) * sizeof(char));
+        spec_fmt_str[spec_len] = '\0';
+
+        switch (spec) {
+            case 'd': case 'i':
+            switch (len) {
+                case LEN_HH: { _RENDER_FMT_SPEC(int); break; } // Actually a signed char
+                case LEN_H:  { _RENDER_FMT_SPEC(int); break; } // Actually a short
+                case LEN_NONE: { _RENDER_FMT_SPEC(int); break; }
+                case LEN_L: { _RENDER_FMT_SPEC(long); break; }
+                case LEN_LL: { _RENDER_FMT_SPEC(long long); break; }
+                case LEN_J: { _RENDER_FMT_SPEC(intmax_t); break; }
+                case LEN_Z: { _RENDER_FMT_SPEC(size_t); break; }
+                case LEN_T: { _RENDER_FMT_SPEC(ptrdiff_t); break; }
+                default: UNREACHABLE("Invalid length specifier");
+            }
+            break;
+
+        case 'u': case 'o': case 'x': case 'X':
+            switch (len) {
+                case LEN_HH: { _RENDER_FMT_SPEC(unsigned int); break; } // Actually a unsigned char
+                case LEN_H: { _RENDER_FMT_SPEC(unsigned int); break; }  // Actually a unsigned short
+                case LEN_NONE: { _RENDER_FMT_SPEC(unsigned int); break; }
+                case LEN_L: { _RENDER_FMT_SPEC(unsigned long); break; }
+                case LEN_LL: { _RENDER_FMT_SPEC(unsigned long long); break; }
+                case LEN_J: { _RENDER_FMT_SPEC(uintmax_t); break; }
+                case LEN_Z: { _RENDER_FMT_SPEC(size_t); break; }
+                case LEN_T: { _RENDER_FMT_SPEC(ptrdiff_t); break; }
+                default: UNREACHABLE("Invalid length specifier");
+            }
+            break;
+
+        /* ---------------- floats ---------------- */
+        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A':
+            if (len == LEN_CAP_L) { _RENDER_FMT_SPEC(long double); } 
+            else { _RENDER_FMT_SPEC(double); }
+            break;
+
+        /* ---------------- char ---------------- */
+        case 'c':
+            if (len == LEN_L) { _RENDER_FMT_SPEC(wint_t); } 
+            else { _RENDER_FMT_SPEC(int); } // Actually a char
+            break;
+
+        /* ---------------- string ---------------- */
+        case 's':
+            if (len == LEN_L) { _RENDER_FMT_SPEC(wchar_t*); } 
+            else { _RENDER_FMT_SPEC(char*); }
+            break;
+
+        /* ---------------- pointer ---------------- */
+        case 'p':
+        _RENDER_FMT_SPEC(void*);
+            break;
+
+        /* ---------------- n spec ---------------- */
+        case 'n':
+            switch (len) {
+                // We dont actually have to care about the type here since all of them are pointers who all have the same size
+                case LEN_HH: { _RENDER_FMT_SPEC(signed char*); break; } // signed char *
+                case LEN_H: { _RENDER_FMT_SPEC(short*); break; }     // short *
+                case LEN_NONE: { _RENDER_FMT_SPEC(int*); break; }     // int *
+                case LEN_L: { _RENDER_FMT_SPEC(long*); break; }       // long *
+                case LEN_LL: { _RENDER_FMT_SPEC(long long*); break; }  // long long *
+                case LEN_J: { _RENDER_FMT_SPEC(intmax_t*); break; }   // intmax_t *
+                case LEN_Z: { _RENDER_FMT_SPEC(size_t*); break; }     // size_t *
+                case LEN_T: { _RENDER_FMT_SPEC(ptrdiff_t*); break; }  // prtdiff_t *
+                default: UNREACHABLE("Invalid length specifier");
+
+            }
+            break;
+        default:
+            axp_throw(ctx, AXP_ERR_FORMAT, "Unknown specifier: %%%c.", spec);
+            return -1;
+        }
+    }
+
+    #undef _WRITE_STR
+    #undef _WRITE_FMT_SPEC
+    #undef _RENDER_FMT_SPEC
+
+    axp_error_reset(ctx);
+    
+    return out_pos;
+}
+
+static int axp__write_to_fd(AXP_Ctx *ctx, void *file_desc, const char *txt, size_t txt_len, int *curr_pos) {
+    FILE *fd = *(FILE **)file_desc;
+    size_t written = fwrite(txt, 1, txt_len, fd);
+    if (written < txt_len && ferror(fd)) {
+        axp_throw(ctx, AXP_ERR_WRITE, "Could not write to file descriptor: %s", strerror(errno));
+        return -1;
+    }
+    *curr_pos += written;
+    return (int)written;
+}
+
+static int axp__write_to_buf(AXP_Ctx *ctx, void *buffer, const char *txt, size_t txt_len, int *curr_pos) {
+    (void)ctx;
+    struct {
+        char *buf;
+        size_t buf_sz;
+    } *b = buffer;
+    if ((size_t)*curr_pos < b->buf_sz) {
+        size_t _actual_length = (txt_len < b->buf_sz - (size_t)*curr_pos) ? txt_len : (b->buf_sz - (size_t)*curr_pos);
+        if (b->buf) memcpy(b->buf + *curr_pos, txt, _actual_length);
+    }
+    *curr_pos += (int)txt_len;
+    return (int)txt_len;
+}
+
+int axp_vsnprintf(AXP_Ctx *ctx, char *buf, size_t buf_sz, const char *fmt, va_list *args) {
+    axp__print_target target = { 0 };
+    target.type = AXP__TARGET_BUF;
+    target.as.buf = buf;
+    target.as.buf_sz = buf_sz;
+    target.write_fn = axp__write_to_buf;
+    return axp__printf_core(ctx, &target, fmt, args);
+}
+
+int axp_vfprintf(AXP_Ctx *ctx, FILE *stream, const char *fmt, va_list *args) {
+    axp__print_target target = { 0 };
+    target.type = AXP__TARGET_FD;
+    target.as.fd = stream;
+    target.write_fn = axp__write_to_fd;
+    return axp__printf_core(ctx, &target, fmt, args);
+}
+
+int axp_snprintf(AXP_Ctx *ctx, char *buf, size_t buf_sz, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    axp__print_target target = { 0 };
+    target.type = AXP__TARGET_BUF;
+    target.as.buf = buf;
+    target.as.buf_sz = buf_sz;
+    target.write_fn = axp__write_to_buf;
+    int ret = axp__printf_core(ctx, &target, fmt, &args);
+    va_end(args);
+    return ret;
+}
+
+int axp_fprintf(AXP_Ctx *ctx, FILE *stream, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    axp__print_target target = { 0 };
+    target.type = AXP__TARGET_FD;
+    target.as.fd = stream;
+    target.write_fn = axp__write_to_fd;
+    int ret = axp__printf_core(ctx, &target, fmt, &args);
+    va_end(args);
+    return ret;
+}
+
+int axp_printf(AXP_Ctx *ctx, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    axp__print_target target = { 0 };
+    target.type = AXP__TARGET_FD;
+    target.as.fd = stdout;
+    target.write_fn = axp__write_to_fd;
+    int ret = axp__printf_core(ctx, &target, fmt, &args);
+    va_end(args);
+    return ret;
 }
