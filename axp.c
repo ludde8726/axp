@@ -163,6 +163,7 @@ bool axp_copyi(AXP_Ctx *ctx, AXP_Int *restrict dst, const AXP_Int *restrict src)
     return true; // We do not need to reset error here since init already does and nothing we do after can raise any errors
 }
 
+// TODO: For some reason we dont handle x becoming smaller, can't remember if there's a reason but i just think i forgot
 bool axp_copyi_ex(AXP_Ctx *ctx, AXP_Int *restrict dst, const AXP_Int *restrict src, axp_size_t capacity)
 {
     AXP_ASSERT(!dst->digits);
@@ -759,7 +760,7 @@ bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AX
     AXP_Int y_copy = { 0 };
     AXP_Int x_copy = { 0 };
     axp_size_t remainder_sz = x->size;
-    if (!axp_copyi_ex(ctx, &y_copy, y, x->size)) goto cleanup_error;
+    if (!axp_copyi_ex(ctx, &y_copy, y, y->size > x->size ? y->size : x->size)) goto cleanup_error;
     if (!axp_copyi(ctx, &x_copy, x)) goto cleanup_error;
 
     if (!axp_initi(ctx, res, x->size)) goto cleanup_error;
@@ -780,7 +781,7 @@ cleanup_success:
     res->sign = x->sign ^ y->sign;
     if (remainder) {
         *remainder = x_copy;
-        remainder->size = remainder_sz;
+        remainder->size = remainder_sz ? remainder_sz : 1;
         remainder->sign = x->sign;
     }
     else axp_freei(&x_copy);
@@ -868,9 +869,9 @@ axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y,
 bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res) {
     bool is_zero;
     if (!axp_is_zeroi(ctx, x, &is_zero)) return false;
-    if (is_zero && ! (y == 0)) {
+    if (is_zero && !(y == 0)) {
         if (!axp_copyi(ctx, res, x)) return false;
-    } else if (y == 0) {
+    } else if (is_zero && y == 0) {
         axp_throw(ctx, AXP_ERR_DIV_ZERO, "0^0 is undefined.");
         return false;
     }
@@ -912,7 +913,7 @@ cleanup_error:
 
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);
-    size_t needed_space = x->size + 1;
+    size_t needed_space = x->size ? x->size + 1 : 2;
     if (x->sign) needed_space++;
     if (!should_write) return needed_space;
 
