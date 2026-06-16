@@ -1,17 +1,13 @@
 import ctypes
 from pathlib import Path
-from typing import List, Any
 import subprocess
 import random
 from tqdm import tqdm
 from dataclasses import dataclass, field
 import sys
+from decimal import Decimal, getcontext, ROUND_HALF_UP
 
-from ctypes import (
-  c_uint8, c_uint32, c_int64, c_int, c_size_t, c_char_p, c_char,
-  c_bool, c_int8, c_void_p, POINTER, Structure, Union, CFUNCTYPE,
-  byref, create_string_buffer
-)
+from ctypes import c_uint8, c_uint32, c_int64, c_int, c_size_t, c_char_p, c_char, byref, c_bool, c_void_p, POINTER, Structure, create_string_buffer
 
 sys.set_int_max_str_digits(0)
 
@@ -96,7 +92,7 @@ class AxpFxn:
 
 # TODO: Don't even know why i made these classes, just make funcions instead, then i can even add a signature for some type checking
 axp_freei = AxpFxn("axp_freei", None, POINTER(AXP_Int))
-axp_feeef = AxpFxn("axp_freef", None, POINTER(AXP_Float))
+axp_freef = AxpFxn("axp_freef", None, POINTER(AXP_Float))
 
 axp_addi = AxpFxn("axp_addi", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Int), POINTER(AXP_Int), POINTER(AXP_Int))
 axp_subi = AxpFxn("axp_subi", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Int), POINTER(AXP_Int), POINTER(AXP_Int))
@@ -120,7 +116,7 @@ axp_atof = AxpFxn("axp_atof",       c_bool,   POINTER(AXP_Ctx),  c_char_p, POINT
 axp_strerror = AxpFxn("axp_strerror",    c_char_p, POINTER(AXP_Ctx))
 
 ctx = AXP_Ctx()
-ctx.precision = 50
+ctx.precision = 16
 
 def gen_randomi(max_sz, only_pos=False):
   sz = random.randint(1, max_sz)
@@ -139,6 +135,26 @@ def axpi_to_int(x):
   axp_itoa(byref(x), buf, needed)
   return int(buf.value.decode())
 
+def gen_randomf(max_sz, max_exp, only_pos=False):
+  mantissa = gen_randomi(max_sz, only_pos)
+  exp = random.randint(-max_exp, max_exp)
+  digits = str(abs(mantissa))
+  size = len(digits)
+  res_str = "-" if mantissa < 0 else ""
+  if exp >= 0: res_str += digits + "0" * exp + ".0"
+  elif size + exp <= 0:
+    leading_zeroes = abs(size + exp)
+    res_str += "0." + "0" * leading_zeroes + digits
+  else:
+    decimal_index = -exp
+    res_str += digits[:-decimal_index] + "." + digits[-decimal_index:]
+  return res_str
+
+def str_to_axpf(x):
+  axp_x = AXP_Float()
+  if not axp_atof(byref(ctx), x.encode(), byref(axp_x)): raise Exception(axp_strerror(byref(ctx)))
+  return axp_x
+
 
 GREEN = "\033[92m"
 RED   = "\033[91m"
@@ -154,6 +170,8 @@ class TestResults:
   @property
   def passed(self):
     return self.total - self.failed
+
+# Test cases
 
 def _run_add(x, y):
   axp_x, axp_y, axp_res = int_to_axpi(x), int_to_axpi(y), AXP_Int()
@@ -199,8 +217,59 @@ def _run_pow(x, y):
   axp_freei(byref(axp_x)); axp_freei(byref(axp_res))
   return result, x ** y, f"{x} ^ {y}"
 
+def _run_addf(x_str, y_str):
+  axp_x = str_to_axpf(x_str)
+  axp_y = str_to_axpf(y_str)
+  axp_res = AXP_Float()
+  if not axp_addf(byref(ctx), byref(axp_x), byref(axp_y), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = ctx.precision
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +Decimal(x_str) + +Decimal(y_str)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_y)); axp_freef(byref(axp_res))
+  return actual, expected, f"{x_str} + {y_str}"
 
-# ─── Input generators ─────────────────────────────────────────────────────────
+def _run_subf(x_str, y_str):
+  axp_x = str_to_axpf(x_str)
+  axp_y = str_to_axpf(y_str)
+  axp_res = AXP_Float()
+  if not axp_subf(byref(ctx), byref(axp_x), byref(axp_y), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = ctx.precision
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +Decimal(x_str) - +Decimal(y_str)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_y)); axp_freef(byref(axp_res))
+  return actual, expected, f"{x_str} - {y_str}"
+
+def _run_mulf(x_str, y_str):
+  axp_x = str_to_axpf(x_str)
+  axp_y = str_to_axpf(y_str)
+  axp_res = AXP_Float()
+  if not axp_mulf(byref(ctx), byref(axp_x), byref(axp_y), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = ctx.precision
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +Decimal(x_str) * +Decimal(y_str)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_y)); axp_freef(byref(axp_res))
+  return actual, expected, f"{x_str} * {y_str}"
+
+def _run_divf(x_str, y_str):
+  axp_x = str_to_axpf(x_str)
+  axp_y = str_to_axpf(y_str)
+  axp_res = AXP_Float()
+  if not axp_divf(byref(ctx), byref(axp_x), byref(axp_y), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = ctx.precision
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +Decimal(x_str) / +Decimal(y_str)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_y)); axp_freef(byref(axp_res))
+  return actual, expected, f"{x_str} / {y_str}"
+
+# Input generators
 
 def _gen_binary(bits):
   return lambda: (gen_randomi(bits), gen_randomi(bits))
@@ -231,6 +300,9 @@ def _gen_big_pow(base_bits, exp_bits):
     return x, y
   return gen
 
+def _gen_binary_float(bits, max_exp):
+  return lambda: (gen_randomf(bits, max_exp), gen_randomf(bits, max_exp))
+
 def _format_failure(name, expr, got, expected):
   if isinstance(got, tuple):
     res, rem = got
@@ -247,14 +319,14 @@ def _format_failure(name, expr, got, expected):
     f"  Actual result: {expected}\n  Diff: {expected - got}"
   )
 
-def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, exact_equals=True):
+def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, *extra_args, cmp=None):
   i = 0
   with tqdm(total=iterations, leave=False) as t:
     t.set_description(name)
     for i in range(iterations):
       inputs = gen_inputs()
-      got, expected, expr = run_op(*inputs)
-      if exact_equals and got != expected:
+      got, expected, expr = run_op(*inputs, *extra_args)
+      if got != expected:
         results.failed_cases.append(_format_failure(name, expr, got, expected))
         results.failed += 1
         results.total += i + 1
@@ -262,8 +334,6 @@ def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, exact_
         t.close()
         print(f"{name}: {RED}Failed{RESET}")
         return
-      elif not exact_equals:
-        pass # TODO: somehow check float equals
       t.update(1)
 
   results.total += iterations
@@ -271,12 +341,16 @@ def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, exact_
 
 def run_all_tests() -> TestResults:
   tests = [
-    ("Random Integer Add",     100_000, _gen_binary(100),    _run_add),
-    ("Random Integer Sub",     100_000, _gen_binary(100),    _run_sub),
-    ("Random Integer Mul",     100_000, _gen_binary(100),    _run_mul),
-    ("Random Integer Div",     100_000, _gen_div(100),       _run_div),
-    ("Random Integer Pow",     100_000, _gen_pow(3, 20),     _run_pow),
-    ("Big Random Integer Pow", 250,     _gen_big_pow(14, 3), _run_pow),
+    ("Random Integer Add",     100_000,     _gen_binary(100),          _run_add),
+    ("Random Integer Sub",     100_000,     _gen_binary(100),          _run_sub),
+    ("Random Integer Mul",     100_000,     _gen_binary(100),          _run_mul),
+    ("Random Integer Div",     100_000,     _gen_div(100),             _run_div),
+    ("Random Integer Pow",     100_000,     _gen_pow(3, 20),           _run_pow),
+    ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),       _run_pow),
+    ("Random Float Add",       100_000,     _gen_binary_float(50, 30), _run_addf),
+    ("Random Float Sub",       100_000,     _gen_binary_float(50, 30), _run_subf),
+    ("Random Float Mul",       100_000,     _gen_binary_float(50, 30), _run_mulf),
+    ("Random Float Div",       100_000,     _gen_binary_float(50, 30), _run_divf),
   ]
 
   results = TestResults()
@@ -288,7 +362,8 @@ def run_all_tests() -> TestResults:
 
   return results
 
-results = run_all_tests()
-if results.failed:
-  with open(str(LOG_PATH), 'w') as f:
-    f.write("\n\n".join(results.failed_cases))
+if __name__ == "__main__":
+  results = run_all_tests()
+  if results.failed:
+    with open(str(LOG_PATH), 'w') as f:
+      f.write("\n\n".join(results.failed_cases))
