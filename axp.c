@@ -22,30 +22,41 @@
     ( (T)~(T)(1ULL << (sizeof(T)*CHAR_BIT - 1)) )
 
 // This will be needed for exponentiation of floats later
-static bool axp_safe_mul_int64_t(int64_t x, int64_t y, int64_t *res) {
+static inline bool axp__add_exp_overflow(axp_exp_t x, axp_exp_t y) {
+    axp_exp_t max_val = AXP_TYPE_MAX_VALUE(axp_exp_t);
+    axp_exp_t min_val = AXP_TYPE_MIN_VALUE(axp_exp_t);
+
+    if (y > 0) return x > max_val - y;
+    return x < min_val - y;
+}
+
+static inline bool axp__sub_exp_overflow(axp_exp_t x, axp_exp_t y) {
+    axp_exp_t max_val = AXP_TYPE_MAX_VALUE(axp_exp_t);
+    axp_exp_t min_val = AXP_TYPE_MIN_VALUE(axp_exp_t);
+
+    if (y < 0) return x > max_val + y;
+    return x < min_val + y;
+}
+
+static inline bool axp__mul_exp_overflow(axp_exp_t x, axp_exp_t y) {
     if (x == 0 || y == 0) {
-        *res = 0;
-        return true;
-    }
-
-    int64_t min_val = AXP_TYPE_MIN_VALUE(int64_t);
-    int64_t max_val = AXP_TYPE_MAX_VALUE(int64_t);
-
-    if ((x == -1 && y == min_val) || (y == -1 && x == min_val)) {
         return false;
     }
 
-    if (x > 0) {
-        if (y > 0 && x > max_val / y) return false;
-        if (y < 0 && y < min_val / x) return false;
-    } else {
-        if (y > 0 && x < min_val / y) return false;
-        if (y < 0 && x < max_val / y) return false;
+    const axp_exp_t min_val = AXP_TYPE_MIN_VALUE(axp_exp_t);
+    const axp_exp_t max_val = AXP_TYPE_MAX_VALUE(axp_exp_t);
+
+    if ((x == -1 && y == min_val) || (y == -1 && x == min_val)) {
+        return true;
     }
 
-    *res = x * y;
-    return true;
+    if (x > 0) {
+        if (y > 0) return x > max_val / y;
+        return y < min_val / x;
+    }
 
+    if (y > 0) return x < min_val / y;
+    return x < max_val / y;
 }
 
 // ------- Allocation -------
@@ -135,11 +146,6 @@ bool axp_reallocf_round(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size) {
     axp_normalizef(x);    
     axp_error_reset(ctx);
     return true;
-}
-
-void axp_printi(const AXP_Int *x) {
-    if (x->sign) printf("-");
-    for (axp_size_t i = x->size; i > 0; i--) printf("%u", x->digits[i - 1]);
 }
 
 void axp_freei(AXP_Int *x)
@@ -679,8 +685,7 @@ bool axp_mulf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     res->size = res_sz;
     res->sign = x->sign ^ y->sign;
     // Exponent overflow check
-    if ((y->exponent > 0 && x->exponent > AXP_TYPE_MAX_VALUE(axp_exp_t) - y->exponent) ||
-        (y->exponent < 0 && x->exponent < AXP_TYPE_MIN_VALUE(axp_exp_t) - y->exponent)) {
+    if (axp__add_exp_overflow(x->exponent, y->exponent)) {
         axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow (%lld + %lld)", x->exponent, y->exponent);
         goto cleanup_error;
     }
@@ -723,7 +728,7 @@ axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *
     return res_sz;
 }
 
-axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t max_prec, axp_exp_t *exp_adjust) {
+axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *exp_adjust) {
     axp_size_t res_sz = 0;
     
     if (x_sz >= y_sz) {
@@ -737,9 +742,9 @@ axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_dig
     }
     bool first_access = false;
 
-    while (res_sz < max_prec) {
+    while (res_sz < res_cap) {
         if (axp__is_zero_digits(x_digits, x_sz)) {
-            memmove(res, res + (max_prec - res_sz), res_sz * sizeof(axp_digit_t));
+            memmove(res, res + (res_cap - res_sz), res_sz * sizeof(axp_digit_t));
             break;
         }
         axp_size_t count = 0;
@@ -749,7 +754,7 @@ axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_dig
             count++;
         }
 
-        res[max_prec - res_sz - 1] = (axp_digit_t) count;
+        res[res_cap - res_sz - 1] = (axp_digit_t) count;
         if (first_access || (count != 0)) {
             first_access = true;
             res_sz++;
@@ -826,15 +831,12 @@ bool axp_divf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *r
     res->size = res_sz;
     res->sign = x->sign ^ y->sign;
     // Exponent overflow check
-    if ((y->exponent < 0 && x->exponent > AXP_TYPE_MAX_VALUE(axp_exp_t) + y->exponent) ||
-        (y->exponent > 0 && x->exponent < AXP_TYPE_MIN_VALUE(axp_exp_t) + y->exponent)) {
+    if (axp__sub_exp_overflow(x->exponent, y->exponent)) {
         axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow (%lld - %lld)", x->exponent, y->exponent);
         goto cleanup_error;
     }
     res->exponent = x->exponent - y->exponent;
-
-    if ((exp_adjust > 0 && res->exponent > AXP_TYPE_MAX_VALUE(axp_exp_t) - exp_adjust) ||
-        (exp_adjust < 0 && res->exponent < AXP_TYPE_MIN_VALUE(axp_exp_t) - exp_adjust)) {
+    if (axp__add_exp_overflow(res->exponent, exp_adjust)) {
         axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow (%lld + %lld)", res->exponent, exp_adjust);
         goto cleanup_error;
     }
@@ -855,7 +857,6 @@ cleanup_error:
     return false;
 }
 
-// Calculate the res size (max) by y * x->size (always between y * (x->size - 1) + 1 and y * x->size)
 axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res) {
     res[0] = 1;
     axp_size_t res_sz = 1;
@@ -873,6 +874,37 @@ axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y,
             x_sz = axp__mul_digits(x_digits, x_sz, x_digits, x_sz, tmp_buf);
             memcpy(x_digits, tmp_buf, x_sz * sizeof(axp_digit_t));
             memset(tmp_buf, 0, x_sz * sizeof(axp_digit_t));
+        }
+    }
+    return res_sz;
+}
+axp_size_t axp__pow_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *exp_adj) {
+    res[0] = 1;
+    axp_size_t res_sz = 1;
+    *exp_adj = 0;
+    axp_exp_t x_exp_adj = 0;
+
+    axp_size_t remainder = 0;
+    while (y != 0) {
+        remainder = y % 2;
+        y /= 2;
+
+        if (remainder) {
+            axp_size_t prod_sz = axp__mul_digits(res, res_sz, x_digits, x_sz, tmp_buf);
+            axp_size_t shift = (prod_sz > res_cap) ? (prod_sz - res_cap) : 0;
+            res_sz = prod_sz - shift;
+            memcpy(res, tmp_buf + shift, res_sz * sizeof(axp_digit_t));
+            memset(tmp_buf, 0, prod_sz * sizeof(axp_digit_t));
+            *exp_adj += (axp_exp_t)shift + x_exp_adj;
+        }
+
+        if (y != 0) {
+            axp_size_t prod_sz = axp__mul_digits(x_digits, x_sz, x_digits, x_sz, tmp_buf);
+            axp_size_t shift = (prod_sz > res_cap) ? (prod_sz - res_cap) : 0;
+            x_sz = prod_sz - shift;
+            memcpy(x_digits, tmp_buf + shift, x_sz * sizeof(axp_digit_t));
+            memset(tmp_buf, 0, prod_sz * sizeof(axp_digit_t));
+            x_exp_adj = 2 * x_exp_adj + (axp_exp_t)shift;
         }
     }
     return res_sz;
@@ -923,6 +955,118 @@ cleanup_error:
     return false;
 }
 
+bool axp_powf(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res) {
+    bool x_zero;
+    if (!axp_is_zerof(ctx, x, &x_zero)) return false;
+
+    if (x_zero && y == 0) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "0^0 is undefined.");
+        return false;
+    }
+    if (x_zero) {
+        if (y < 0) {
+            axp_throw(ctx, AXP_ERR_DIV_ZERO, "0^negative is undefined.");
+            return false;
+        }
+        if (!axp_initf_ex(ctx, res, ctx->precision)) return false;
+        res->size = 1;
+        return true;
+    }
+    if (y == 0) {
+        if (!axp_initf_ex(ctx, res, ctx->precision)) return false;
+        res->digits[0] = 1;
+        res->size = 1;
+        return true;
+    }
+    axp_size_t abs_y  = (axp_size_t)(y < 0 ? -y : y); // TODO: This may truncate y
+
+    // floor(log2(abs_y)) extra precision needed (https://gitlab.inria.fr/mpfr/mpfr/-/blob/master/src/pow_ui.c?ref_type=heads line 96)
+    axp_size_t guard = 0;
+    axp_size_t tmp_y = abs_y;
+    while (tmp_y > 1) { guard++; tmp_y >>= 1; }
+    guard += 1;
+
+    axp_size_t prec = ctx->precision + guard;
+
+    AXP_Float x_cpy = { 0 };
+    AXP_Float tmp_buf   = { 0 };
+
+    if (!axp_initf_ex(ctx, res, prec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &tmp_buf, 2 * prec)) goto cleanup_error;
+    if (!axp_copyf_ex(ctx, &x_cpy, x, prec)) goto cleanup_error;
+
+    axp_exp_t exp_adj;
+    // Check for x->exponent * y
+    res->size = axp__pow_digits_float(x_cpy.digits, x_cpy.size, abs_y, tmp_buf.digits, res->digits, prec, &exp_adj);
+    if (axp__mul_exp_overflow(x->exponent, (axp_exp_t)abs_y)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` (%lld * %u)", x->exponent, abs_y);
+        goto cleanup_error;
+    }
+    res->exponent = x->exponent * (axp_exp_t)abs_y;
+    // Check for x->exponent * y + exp_ajd
+    if (axp__add_exp_overflow(res->exponent, exp_adj)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` (%lld + %lld)", res->exponent, exp_adj);
+        goto cleanup_error;
+    }
+    res->exponent += exp_adj;
+    res->sign = (abs_y % 2) && x->sign;
+
+    axp_normalizef(res);
+
+    if (y < 0) {
+        AXP_Float one    = { 0 };
+        AXP_Float recip  = { 0 };
+        AXP_Float res_cpy = { 0 };
+        if (!axp_initf_ex(ctx, &one, prec+1)) goto cleanup_neg_error; // Don't know why but for some reason we need + 1 capacity on the dividend
+
+        one.digits[0] = 1;
+        one.size      = 1;
+        if (!axp_initf_ex(ctx, &recip, prec)) goto cleanup_neg_error;
+        if (!axp_copyf_ex_round(ctx, &res_cpy, res, prec)) goto cleanup_neg_error;
+        axp_exp_t div_exp_adj;
+        axp_size_t recip_sz = axp__div_digits_float(one.digits, one.size, res_cpy.digits, res_cpy.size, recip.digits, prec, &div_exp_adj);
+        recip.size = recip_sz;
+        recip.sign = res->sign;
+        if (axp__sub_exp_overflow(0, res->exponent)) {
+            axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` reciprocal (0 - %lld)", res->exponent);
+            goto cleanup_neg_error;
+        }
+        recip.exponent = -res->exponent;
+        if (axp__add_exp_overflow(recip.exponent, div_exp_adj)) {
+            axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` reciprocal (%lld + %lld)", recip.exponent, div_exp_adj);
+            goto cleanup_neg_error;
+        }
+        recip.exponent += div_exp_adj;
+        axp_normalizef(&recip);
+        if (!axp_reallocf_round(ctx, &recip, ctx->precision)) goto cleanup_neg_error;
+        axp_freef(&one);
+        axp_freef(&res_cpy);
+        axp_freef(res);
+        *res = recip;
+        goto cleanup_success;
+
+    cleanup_neg_error:
+        axp_freef(&one);
+        axp_freef(&recip);
+        axp_freef(&res_cpy);
+        goto cleanup_error;
+    }
+
+    if (!axp_reallocf_round(ctx, res, ctx->precision)) goto cleanup_error;
+
+cleanup_success:
+    axp_freef(&tmp_buf);
+    axp_freef(&x_cpy);
+    axp_error_reset(ctx);
+    return true;
+cleanup_error:
+    axp_freef(res);
+    axp_freef(&x_cpy);
+    axp_freef(&tmp_buf);
+    return false;
+}
+
+// TODO: Should not include null terminator in needed_space.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);
     size_t needed_space = x->size ? x->size + 1 : 2;
@@ -1012,6 +1156,7 @@ bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x)
     return true;
 }
 
+// TODO: Should not include null terminator in needed_space.
 size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);
     size_t needed_space = 0;

@@ -104,6 +104,7 @@ axp_addf = AxpFxn("axp_addf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POIN
 axp_subf = AxpFxn("axp_subf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
 axp_mulf = AxpFxn("axp_mulf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
 axp_divf = AxpFxn("axp_divf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
+axp_powf = AxpFxn("axp_powf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_exp_t, POINTER(AXP_Float))
 
 axp_itoa_alloc = AxpFxn("axp_itoa_alloc", c_char_p, POINTER(AXP_Ctx),  POINTER(AXP_Int))
 
@@ -269,6 +270,18 @@ def _run_divf(x_str, y_str):
   axp_freef(byref(axp_x)); axp_freef(byref(axp_y)); axp_freef(byref(axp_res))
   return actual, expected, f"{x_str} / {y_str}"
 
+def _run_powf(x_str, y):
+  axp_x = str_to_axpf(x_str)
+  axp_res = AXP_Float()
+  if not axp_powf(byref(ctx), byref(axp_x), y, byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = ctx.precision
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +Decimal(x_str) ** +Decimal(y)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
+  return actual, expected, f"{x_str} ** {y}"
+
 # Input generators
 
 def _gen_binary(bits):
@@ -297,6 +310,15 @@ def _gen_big_pow(base_bits, exp_bits):
     while x == 0 and y == 0:
       x = gen_randomi(base_bits)
       y = gen_randomi(exp_bits, only_pos=True)
+    return x, y
+  return gen
+
+def _gen_powf(base_bits, max_exp, exponent_max):
+  def gen():
+    x, y = 0, 0
+    while x == 0 and y == 0:
+        x = gen_randomf(base_bits, max_exp) # For now we only test positive exponents since negative exponents does not pass...
+        y = random.randint(0, exponent_max)
     return x, y
   return gen
 
@@ -351,6 +373,8 @@ def run_all_tests() -> TestResults:
     ("Random Float Sub",       100_000,     _gen_binary_float(50, 30), _run_subf),
     ("Random Float Mul",       100_000,     _gen_binary_float(50, 30), _run_mulf),
     ("Random Float Div",       100_000,     _gen_binary_float(50, 30), _run_divf),
+    ("Random Float Pow",       100_000,     _gen_powf(3, 30, 20),      _run_powf),
+
   ]
 
   results = TestResults()

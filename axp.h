@@ -88,8 +88,6 @@ bool axp_realloci(AXP_Ctx *ctx, AXP_Int *x, axp_size_t size);
 bool axp_reallocf(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
 bool axp_reallocf_round(AXP_Ctx *ctx, AXP_Float *x, axp_size_t size);
 
-void axp_printi(const AXP_Int *x);
-
 void axp_freei(AXP_Int *x);
 void axp_freef(AXP_Float *x);
 
@@ -161,7 +159,9 @@ bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AX
 bool axp_divf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
 
 axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res);
+axp_size_t axp__pow_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *exp_adj);
 bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
+bool axp_powf(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res);
 
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);
