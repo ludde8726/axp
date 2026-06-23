@@ -105,6 +105,7 @@ axp_subf = AxpFxn("axp_subf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POIN
 axp_mulf = AxpFxn("axp_mulf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
 axp_divf = AxpFxn("axp_divf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
 axp_powf = AxpFxn("axp_powf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_exp_t, POINTER(AXP_Float))
+axp_e_ex = AxpFxn("axp_e_ex", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_size_t)
 
 axp_itoa_alloc = AxpFxn("axp_itoa_alloc", c_char_p, POINTER(AXP_Ctx),  POINTER(AXP_Int))
 
@@ -282,6 +283,17 @@ def _run_powf(x_str, y):
   axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
   return actual, expected, f"{x_str} ** {y}"
 
+def _run_e_check(prec):
+  axp_res = AXP_Float()
+  if not axp_e_ex(byref(ctx), byref(axp_res), prec): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = prec
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +(+Decimal(1)).exp()
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_res))
+  return actual, expected, f"e"
+
 # Input generators
 
 def _gen_binary(bits):
@@ -341,13 +353,13 @@ def _format_failure(name, expr, got, expected):
     f"  Actual result: {expected}\n  Diff: {expected - got}"
   )
 
-def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, *extra_args, cmp=None):
+def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, cmp=None):
   i = 0
   with tqdm(total=iterations, leave=False) as t:
     t.set_description(name)
     for i in range(iterations):
       inputs = gen_inputs()
-      got, expected, expr = run_op(*inputs, *extra_args)
+      got, expected, expr = run_op(*inputs)
       if got != expected:
         results.failed_cases.append(_format_failure(name, expr, got, expected))
         results.failed += 1
@@ -363,17 +375,18 @@ def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, *extra
 
 def run_all_tests() -> TestResults:
   tests = [
-    ("Random Integer Add",     100_000,     _gen_binary(100),          _run_add),
-    ("Random Integer Sub",     100_000,     _gen_binary(100),          _run_sub),
-    ("Random Integer Mul",     100_000,     _gen_binary(100),          _run_mul),
-    ("Random Integer Div",     100_000,     _gen_div(100),             _run_div),
-    ("Random Integer Pow",     100_000,     _gen_pow(3, 20),           _run_pow),
-    ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),       _run_pow),
-    ("Random Float Add",       100_000,     _gen_binary_float(50, 30), _run_addf),
-    ("Random Float Sub",       100_000,     _gen_binary_float(50, 30), _run_subf),
-    ("Random Float Mul",       100_000,     _gen_binary_float(50, 30), _run_mulf),
-    ("Random Float Div",       100_000,     _gen_binary_float(50, 30), _run_divf),
-    ("Random Float Pow",       100_000,     _gen_powf(3, 30, 20),      _run_powf),
+    ("Random Integer Add",     100_000,     _gen_binary(100),                 _run_add),
+    ("Random Integer Sub",     100_000,     _gen_binary(100),                 _run_sub),
+    ("Random Integer Mul",     100_000,     _gen_binary(100),                 _run_mul),
+    ("Random Integer Div",     100_000,     _gen_div(100),                    _run_div),
+    ("Random Integer Pow",     100_000,     _gen_pow(3, 20),                  _run_pow),
+    ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),              _run_pow),
+    ("Random Float Add",       100_000,     _gen_binary_float(50, 30),        _run_addf),
+    ("Random Float Sub",       100_000,     _gen_binary_float(50, 30),        _run_subf),
+    ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),        _run_mulf),
+    ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
+    ("Random Float Pow",       100_000,     _gen_powf(3, 30, 20),             _run_powf),
+    ("E to random Precision",  250,         lambda: [random.randint(1, 150)], _run_e_check),
 
   ]
 
