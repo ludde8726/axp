@@ -46,17 +46,17 @@ typedef struct {
 typedef struct {
     axp_size_t size;
     axp_size_t capacity;
-    axp_digit_t *digits;
-    uint8_t sign;
+    axp_digit_t *digits; // Digits in little-endian order (least significant digit first.)
+    uint8_t sign;        // One bit representing positve (0) or negative (1)
 } AXP_Int;
 
 typedef struct {
     axp_size_t size;
     axp_size_t capacity;
-    axp_digit_t *digits;
-    uint8_t sign;
+    axp_digit_t *digits; // Digits in little-endian order (least significant digit first.)
+    uint8_t sign;        // One bit representing positve (0) or negative (1)
     axp_exp_t exponent;
-} AXP_Float;
+} AXP_Float; // Number is represented as value = digits * 10^exp
 
 typedef int (*axp__print_writer_fn)(AXP_Ctx *, void *, const char *, size_t, int *);
 
@@ -143,25 +143,32 @@ void axp_align_float_digits(AXP_Float *x, AXP_Float *y);
 axp_size_t axp__add_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_addi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
 bool axp_addf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
+bool axp_addf_ex(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision);
 
 // NOTE: Assumes that `x > y`
 axp_size_t axp__sub_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_subi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
 bool axp_subf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
+bool axp_subf_ex(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision);
 
 axp_size_t axp__mul_digits(const axp_digit_t *x_digits, axp_size_t x_sz, const axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res);
 bool axp_muli(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res);
 bool axp_mulf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
+bool axp_mulf_ex(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision);
 
 axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t *remainder_sz);
 axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t max_prec, axp_exp_t *exp_adjust);
 bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AXP_Int *remainder);
 bool axp_divf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
+bool axp_divf_ex(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision);
 
 axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res);
 axp_size_t axp__pow_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *exp_adj);
 bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
 bool axp_powf(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res);
+bool axp_powf_ex(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res, axp_size_t precision);
+
+bool axp_e_ex(AXP_Ctx *ctx, AXP_Float *res, axp_size_t precision);
 
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);
