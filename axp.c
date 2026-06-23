@@ -806,6 +806,29 @@ axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_dig
     return res_sz;
 }
 
+axp_size_t axp__divf_uint(axp_digit_t *x_digits, axp_size_t x_sz, axp_exp_t x_exp, axp_size_t y, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *res_exp) {
+    axp_exp_t exp_adjust;
+    if (x_sz < res_cap) {
+        axp_size_t shift = res_cap - x_sz;
+        x_sz = axp__shli_digits(x_digits, x_sz, shift);
+        exp_adjust = -(axp_exp_t)shift;
+    } else {
+        exp_adjust = 0;
+    }
+
+    axp_size_t carry = 0;
+    for (axp_size_t i = x_sz; i-- > 0;) {
+        axp_size_t cur = carry * BASE + x_digits[i];
+        res[i] = (axp_digit_t)(cur / y);
+        carry = cur % y;
+    }
+
+    axp_size_t sz = x_sz;
+    while (sz > 1 && res[sz - 1] == 0) sz--;
+    *res_exp = x_exp + exp_adjust;
+    return sz;
+}
+
 bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AXP_Int *remainder) {
     bool is_zero;
     if (!axp_is_zeroi(ctx, y, &is_zero)) return false;
@@ -1127,13 +1150,11 @@ bool axp_e_ex(AXP_Ctx *ctx, AXP_Float *res, axp_size_t precision) {
     
     AXP_Float term = { 0 };
     AXP_Float threshold = { 0 };
-    AXP_Float k_float = { 0 };
     AXP_Float scratch = { 0 };
 
     if (!axp_initf_ex(ctx, res, workprec)) return false;
     if (!axp_initf_ex(ctx, &term, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &threshold, workprec)) goto cleanup_error;
-    if (!axp_initf_ex(ctx, &k_float, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &scratch, workprec)) goto cleanup_error;
 
     term.digits[0] = 1;
@@ -1148,22 +1169,21 @@ bool axp_e_ex(AXP_Ctx *ctx, AXP_Float *res, axp_size_t precision) {
 
     axp_size_t k = 1;
     while (true) {
-        memset(k_float.digits, 0, k_float.size * sizeof(axp_digit_t));
-        k_float.size = 0;
-        k_float.exponent = 0;
-        axp_size_t tmp_k = k;
-        while (tmp_k > 0) {
-            k_float.digits[k_float.size++] = (axp_digit_t)(tmp_k % BASE);
-            tmp_k /= BASE;
-        }
-        
-        if (!axp_divf_ex(ctx, &term, &k_float, &scratch, workprec)) goto cleanup_error;
+        axp_exp_t new_exp;
+        scratch.size = axp__divf_uint(term.digits, term.size, term.exponent, k, scratch.digits, workprec, &new_exp);
+        scratch.exponent = new_exp;
+        scratch.sign     = term.sign;
         axp__swapf(&term, &scratch);
+        
         int8_t cmp;
         if (!axp_abs_cmpf(ctx, &term, &threshold, &cmp)) goto cleanup_error;
         if (cmp < 0) break;
 
-        if (!axp_addf_ex(ctx, res, &term, &scratch, workprec)) goto cleanup_error;
+        axp_align_float_digits(res, &term);
+
+        scratch.size = axp__add_digits(res->digits, res->size, term.digits, term.size, scratch.digits);
+        scratch.exponent = res->exponent;
+        scratch.sign = 0;
         axp__swapf(res, &scratch);
 
         memset(scratch.digits, 0, scratch.size * sizeof(axp_digit_t));
@@ -1174,7 +1194,6 @@ bool axp_e_ex(AXP_Ctx *ctx, AXP_Float *res, axp_size_t precision) {
 
     axp_freef(&term);
     axp_freef(&threshold);
-    axp_freef(&k_float);
     axp_freef(&scratch);
 
     axp_normalizef(res);
@@ -1185,7 +1204,6 @@ cleanup_error:
     axp_freef(res);
     axp_freef(&term);
     axp_freef(&threshold);
-    axp_freef(&k_float);
     axp_freef(&scratch);
     return false;
 }

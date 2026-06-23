@@ -386,7 +386,7 @@ def run_all_tests() -> TestResults:
     ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),        _run_mulf),
     ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
     ("Random Float Pow",       100_000,     _gen_powf(3, 30, 20),             _run_powf),
-    ("E to random Precision",  250,         lambda: [random.randint(1, 150)], _run_e_check),
+    ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],_run_e_check),
 
   ]
 

@@ -158,6 +158,7 @@ bool axp_mulf_ex(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float
 
 axp_size_t axp__div_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t *remainder_sz);
 axp_size_t axp__div_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_digit_t *y_digits, axp_size_t y_sz, axp_digit_t *res, axp_size_t max_prec, axp_exp_t *exp_adjust);
+axp_size_t axp__divf_uint(axp_digit_t *x_digits, axp_size_t x_sz, axp_exp_t x_exp, axp_size_t y, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *res_exp);
 bool axp_divi(AXP_Ctx *ctx, const AXP_Int *x, const AXP_Int *y, AXP_Int *res, AXP_Int *remainder);
 bool axp_divf(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res);
 bool axp_divf_ex(AXP_Ctx *ctx, const AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision);
