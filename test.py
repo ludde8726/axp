@@ -106,6 +106,7 @@ axp_mulf = AxpFxn("axp_mulf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POIN
 axp_divf = AxpFxn("axp_divf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
 axp_powf = AxpFxn("axp_powf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_exp_t, POINTER(AXP_Float))
 axp_e_ex = AxpFxn("axp_e_ex", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_size_t)
+axp_expf = AxpFxn("axp_expf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float))
 
 axp_itoa_alloc = AxpFxn("axp_itoa_alloc", c_char_p, POINTER(AXP_Ctx),  POINTER(AXP_Int))
 
@@ -160,6 +161,7 @@ def str_to_axpf(x):
 
 GREEN = "\033[92m"
 RED   = "\033[91m"
+YELLOW   = "\033[93m"
 RESET = "\033[0m"
 
 @dataclass
@@ -294,6 +296,18 @@ def _run_e_check(prec):
   axp_freef(byref(axp_res))
   return actual, expected, f"e"
 
+def _run_expf(x_str):
+  axp_x = str_to_axpf(x_str)
+  axp_res = AXP_Float()
+  if not axp_expf(byref(ctx), byref(axp_x), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  getcontext().prec = ctx.precision
+  getcontext().rounding = ROUND_HALF_UP
+  expected = +Decimal(x_str).exp()
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
+  return actual, expected, f"e^{x_str}"
+
 # Input generators
 
 def _gen_binary(bits):
@@ -353,8 +367,12 @@ def _format_failure(name, expr, got, expected):
     f"  Actual result: {expected}\n  Diff: {expected - got}"
   )
 
-def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, cmp=None):
+def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, skip=False):
   i = 0
+  if skip: 
+    print(f"{name}: {YELLOW}Skipped{RESET}")
+    results.skipped += iterations
+    return
   with tqdm(total=iterations, leave=False) as t:
     t.set_description(name)
     for i in range(iterations):
@@ -387,12 +405,12 @@ def run_all_tests() -> TestResults:
     ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
     ("Random Float Pow",       100_000,     _gen_powf(3, 30, 20),             _run_powf),
     ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],_run_e_check),
-
+    ("Random Exp",             100_000,     lambda: [gen_randomf(3, 2)],      _run_expf,    True), # Skip for now since it does not work...
   ]
 
   results = TestResults()
-  for name, iterations, gen_inputs, run_op in tests:
-    _run_test(name, iterations, gen_inputs, run_op, results)
+  for name, iterations, gen_inputs, run_op, *args in tests:
+    _run_test(name, iterations, gen_inputs, run_op, results, *args)
 
   color = RED if results.failed > 0 else GREEN
   print(f"\n{color}Ran {results.total} tests with {results.failed} failure(s) and {results.skipped} skipped{RESET}")

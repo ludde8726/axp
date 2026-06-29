@@ -129,6 +129,7 @@ bool axp_is_zeroi(AXP_Ctx *ctx, const AXP_Int *x, bool *res);
 void axp_normalizef(AXP_Float *x);
 
 void axp_roundf(AXP_Float *x, axp_size_t significant_digits);
+bool axp_floorf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Int *n, AXP_Float *f);
 
 /* LOW LEVEL OPS */
 axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
@@ -169,7 +170,11 @@ bool axp_powi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t y, AXP_Int *res);
 bool axp_powf(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res);
 bool axp_powf_ex(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res, axp_size_t precision);
 
+bool axp_e(AXP_Ctx *ctx, AXP_Float *res);
 bool axp_e_ex(AXP_Ctx *ctx, AXP_Float *res, axp_size_t precision);
+
+bool axp_expf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res);
+bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision);
 
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);

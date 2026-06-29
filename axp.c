@@ -360,6 +360,46 @@ void axp_roundf(AXP_Float *x, axp_size_t significant_digits) {
     }
 }
 
+bool axp_floorf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Int *n, AXP_Float *f) {
+    if (x->exponent >= 0) {
+        if (!axp_initi(ctx, n, x->size + (axp_size_t)x->exponent)) return false;
+        memcpy(n->digits, x->digits, x->size * sizeof(axp_digit_t));
+        n->size = axp__shli_digits(n->digits, x->size, (axp_size_t)x->exponent);
+        n->sign = x->sign;
+        if (!axp_initf_ex(ctx, f, x->capacity)) { 
+            axp_freei(n);
+            return false;
+        }
+        return true;
+    }
+    // TODO: could overflow, however unlikely
+    axp_size_t frac_count = (axp_size_t)(-x->exponent);
+    if (frac_count >= x->size) {
+        if (!axp_initi(ctx, n, 1)) return false;
+        if (!axp_copyf_exact(ctx, f, x)) { 
+            axp_freei(n); 
+            return false; 
+        }
+        return true;
+    }
+    axp_size_t int_count = x->size - frac_count;
+    if (!axp_initi(ctx, n, int_count)) return false;
+    memcpy(n->digits, x->digits + frac_count, int_count * sizeof(axp_digit_t));
+    n->size = int_count;
+    n->sign = x->sign;
+
+    if (!axp_initf_ex(ctx, f, x->capacity)) {
+        axp_freei(n);
+        return false;
+    }
+    memcpy(f->digits, x->digits, frac_count * sizeof(axp_digit_t));
+    f->size = frac_count;
+    f->exponent = x->exponent;
+    f->sign = x->sign;
+    axp_normalizef(f);
+    return true;
+}
+
 axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift) {
     if (x_sz == 0 || shift == 0) return x_sz;
     memmove(x_digits + shift, x_digits, x_sz * sizeof(axp_digit_t));
@@ -1205,6 +1245,172 @@ cleanup_error:
     axp_freef(&term);
     axp_freef(&threshold);
     axp_freef(&scratch);
+    return false;
+}
+
+bool axp_expf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res) {
+    return axp_expf_ex(ctx, x, res, ctx->precision);
+}
+
+bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision) {
+    axp_size_t guard = 0;
+    axp_size_t tmp_precision = precision;
+    while (tmp_precision) { guard++; tmp_precision /= 10; }
+    axp_size_t workprec = precision + guard + 5;
+
+    AXP_Float x_abs = { 0 };
+    if (!axp_copyf_ex(ctx, &x_abs, x, workprec)) return false;
+    x_abs.sign = 0;
+
+    AXP_Float frac = { 0 };
+    AXP_Int int_part = { 0 };
+    if (!axp_floorf(ctx, &x_abs, &int_part, &frac)) goto cleanup_error;
+
+    // TODO: Overflow check
+    axp_exp_t n = 0;
+    for (axp_size_t i = int_part.size; i > 0; i--) {
+        n *= 10;
+        n += int_part.digits[i-1];
+    }
+
+    AXP_Float term = { 0 };
+    AXP_Float scratch = { 0 };
+    AXP_Float mul_buf  = { 0 };
+    AXP_Float threshold = { 0 };
+    if (!axp_initf_ex(ctx, res, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &term, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &scratch, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &mul_buf, workprec * 2)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &threshold, workprec)) goto cleanup_error;
+
+    threshold.digits[0] = 1;
+    threshold.size = 1;
+    threshold.exponent = -(axp_exp_t)(precision + guard);
+
+    // First iteration just sets res to x^0/0! = 1
+    res->digits[0] = 1;
+    res->size = 1;
+
+    term.digits[0] = 1;
+    term.size = 1;
+
+    axp_size_t k = 1;
+    while (true) {
+        axp_size_t prod_sz = axp__mul_digits(term.digits, term.size, frac.digits, frac.size, mul_buf.digits);
+        axp_size_t shift = (prod_sz > workprec) ? (prod_sz - workprec) : 0;
+        term.size = prod_sz - shift;
+        memcpy(term.digits, mul_buf.digits + shift, term.size * sizeof(axp_digit_t));
+        memset(mul_buf.digits, 0, prod_sz * sizeof(axp_digit_t));
+        term.exponent = term.exponent + frac.exponent + (axp_exp_t)shift;
+        term.sign = 0;
+
+        axp_exp_t new_exp;
+        scratch.size = axp__divf_uint(term.digits, term.size, term.exponent, k, scratch.digits, workprec, &new_exp);
+        scratch.exponent = new_exp;
+        scratch.sign = term.sign;
+        axp__swapf(&term, &scratch);
+        memset(scratch.digits, 0, scratch.capacity * sizeof(axp_digit_t));
+        scratch.size = 1;
+        scratch.exponent = 0;
+
+        int8_t cmp;
+        if (!axp_abs_cmpf(ctx, &term, &threshold, &cmp)) goto cleanup_error;
+        if (cmp < 0) break;
+
+        axp_align_float_digits(res, &term);
+        scratch.size = axp__add_digits(res->digits, res->size, term.digits, term.size, scratch.digits);
+        scratch.exponent = res->exponent;
+        scratch.sign = 0;
+        axp__swapf(res, &scratch);
+        memset(scratch.digits, 0, scratch.capacity * sizeof(axp_digit_t));
+        scratch.size = 1;
+        scratch.exponent = 0;
+        k++;
+    }
+
+    if (n != 0) {
+        AXP_Float e_val = { 0 };
+        AXP_Float e_n = { 0 };
+        AXP_Float tmp = { 0 };
+
+        if (!axp_e_ex(ctx, &e_val, workprec)) goto cleanup_error;
+
+        if (!axp_initf_ex(ctx, &tmp, workprec * 2)) { axp_freef(&tmp); goto cleanup_error; }
+        if (!axp_initf_ex(ctx, &e_n, workprec)) { axp_freef(&tmp); axp_freef(&tmp); goto cleanup_error; }
+        
+        axp_exp_t exp_adj;
+        axp_size_t prod_sz = axp__pow_digits_float(e_val.digits, e_val.size, (axp_size_t)n, tmp.digits, e_n.digits, workprec, &exp_adj);
+        e_n.size = prod_sz;
+        e_n.exponent = e_val.exponent * (axp_exp_t)n + exp_adj;
+        e_n.sign = 0;
+
+        axp_freef(&e_val);
+        axp_freef(&tmp);
+
+        AXP_Float final = { 0 };
+        if (!axp_initf_ex(ctx, &final, workprec * 2)) { axp_freef(&e_n); goto cleanup_error; }
+
+        axp_size_t final_sz = axp__mul_digits(res->digits, res->size, e_n.digits, e_n.size, final.digits);
+        axp_size_t shift = (final_sz > workprec) ? (final_sz - workprec) : 0;
+        final.size = final_sz - shift;
+        memmove(final.digits, final.digits + shift, final.size * sizeof(axp_digit_t));
+        memset(final.digits + final.size, 0, shift * sizeof(axp_digit_t));
+        final.exponent = res->exponent + e_n.exponent + (axp_exp_t)shift;
+        final.sign = 0;
+
+        axp_freef(&e_n);
+        axp_freef(res);
+        *res = final;
+    }
+
+    if (x->sign) {
+        AXP_Float one = { 0 };
+        AXP_Float recip = { 0 };
+        AXP_Float res_cpy = { 0 };
+
+        if (!axp_initf_ex(ctx, &one, workprec + 1)) goto cleanup_error;
+        one.digits[0] = 1;
+        one.size = 1;
+
+        if (!axp_initf_ex(ctx, &recip, workprec)) { axp_freef(&one); goto cleanup_error; }
+        if (!axp_copyf_exact(ctx, &res_cpy, res)) { axp_freef(&one); axp_freef(&recip); goto cleanup_error; }
+
+        axp_exp_t div_exp_adj;
+        axp_size_t recip_sz = axp__div_digits_float(one.digits, one.size, res_cpy.digits, res_cpy.size, recip.digits, workprec, &div_exp_adj);
+        recip.size = recip_sz;
+        recip.sign = 0;
+        recip.exponent = -res->exponent + div_exp_adj;
+
+        axp_normalizef(&recip);
+
+        axp_freef(&one);
+        axp_freef(&res_cpy);
+        axp_freef(res);
+
+        *res = recip;
+    }
+
+    axp_normalizef(res);
+    if (!axp_reallocf_round(ctx, res, precision)) goto cleanup_error;
+
+    axp_freef(&x_abs);
+    axp_freef(&frac);
+    axp_freei(&int_part);
+    axp_freef(&term);
+    axp_freef(&scratch);
+    axp_freef(&mul_buf);
+    axp_freef(&threshold);
+    return true;
+
+cleanup_error:
+    axp_freef(&x_abs);
+    axp_freef(&frac);
+    axp_freei(&int_part);
+    axp_freef(&term);
+    axp_freef(&scratch);
+    axp_freef(&mul_buf);
+    axp_freef(&threshold);
+    axp_freef(res);
     return false;
 }
 
