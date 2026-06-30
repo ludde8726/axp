@@ -1414,6 +1414,95 @@ cleanup_error:
     return false;
 }
 
+bool axp_expf_no_splitting(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision) {
+    axp_size_t guard = 0;
+    axp_size_t tmp_precision = precision;
+    while (tmp_precision) { guard++; tmp_precision /= 10; }
+    axp_size_t workprec = precision + guard + 10;
+
+    AXP_Float x_abs = { 0 };
+    if (!axp_copyf_ex(ctx, &x_abs, x, workprec)) return false;
+    x_abs.sign = 0;
+
+    AXP_Float term = { 0 };
+    AXP_Float term_tmp = { 0 };
+    AXP_Float scratch = { 0 };
+    AXP_Float mul_buf  = { 0 };
+    AXP_Float threshold = { 0 };
+    if (!axp_initf_ex(ctx, res, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &term, workprec)) goto cleanup_error;
+    // if (!axp_initf_ex(ctx, &term_tmp, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &scratch, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &mul_buf, workprec * 2)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &threshold, workprec)) goto cleanup_error;
+
+    threshold.digits[0] = 1;
+    threshold.size = 1;
+    threshold.exponent = -(axp_exp_t)(precision + guard);
+
+    // First iteration just sets res to x^0/0! = 1
+    res->digits[0] = 1;
+    res->size = 1;
+
+    term.digits[0] = 1;
+    term.size = 1;
+
+    axp_size_t k = 1;
+    while (true) {
+        axp_size_t prod_sz = axp__mul_digits(term.digits, term.size, x_abs.digits, x_abs.size, mul_buf.digits);
+        axp_size_t shift = (prod_sz > workprec) ? (prod_sz - workprec) : 0;
+        term.size = prod_sz - shift;
+        memcpy(term.digits, mul_buf.digits + shift, term.size * sizeof(axp_digit_t));
+        memset(mul_buf.digits, 0, prod_sz * sizeof(axp_digit_t));
+        term.exponent = term.exponent + x_abs.exponent + (axp_exp_t)shift;
+        term.sign = 0;
+
+        axp_exp_t new_exp;
+        scratch.size = axp__divf_uint(term.digits, term.size, term.exponent, k, scratch.digits, workprec, &new_exp);
+        scratch.exponent = new_exp;
+        scratch.sign = term.sign;
+        axp__swapf(&term, &scratch);
+        memset(scratch.digits, 0, scratch.capacity * sizeof(axp_digit_t));
+        scratch.size = 1;
+        scratch.exponent = 0;
+
+        int8_t cmp;
+        if (!axp_abs_cmpf(ctx, &term, &threshold, &cmp)) goto cleanup_error;
+        if (cmp < 0) break;
+
+        // TODO: This just keeps allocating scratch and its unecessary however i could not get the axp__add_digits to work for some reason...
+        axp_freef(&scratch);
+        axp_addf_ex(ctx, res, &term, &scratch, workprec);
+        axp__swapf(res, &scratch);
+        memset(scratch.digits, 0, scratch.capacity * sizeof(axp_digit_t));
+        scratch.size = 1;
+        scratch.exponent = 0;
+
+        k++;
+    }
+
+    axp_normalizef(res);
+    if (!axp_reallocf_round(ctx, res, precision)) goto cleanup_error;
+
+    axp_freef(&x_abs);
+    axp_freef(&term);
+    // axp_freef(&term_tmp);
+    axp_freef(&scratch);
+    axp_freef(&mul_buf);
+    axp_freef(&threshold);
+    return true;
+
+cleanup_error:
+    axp_freef(&x_abs);
+    axp_freef(&term);
+    axp_freef(&term_tmp);
+    axp_freef(&scratch);
+    axp_freef(&mul_buf);
+    axp_freef(&threshold);
+    axp_freef(res);
+    return false;
+}
+
 // TODO: Should not include null terminator in needed_space.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);

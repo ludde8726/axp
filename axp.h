@@ -56,7 +56,7 @@ typedef struct {
     axp_digit_t *digits; // Digits in little-endian order (least significant digit first.)
     uint8_t sign;        // One bit representing positve (0) or negative (1)
     axp_exp_t exponent;
-} AXP_Float; // Number is represented as value = digits * 10^exp
+} AXP_Float; // Number is represented as value = digits * 10^exp note that digits is an integer not a float so 1.23 would be represented as 123 * 10^-2
 
 typedef int (*axp__print_writer_fn)(AXP_Ctx *, void *, const char *, size_t, int *);
 
@@ -175,6 +175,7 @@ bool axp_e_ex(AXP_Ctx *ctx, AXP_Float *res, axp_size_t precision);
 
 bool axp_expf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res);
 bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision);
+bool axp_expf_no_splitting(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision);
 
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);

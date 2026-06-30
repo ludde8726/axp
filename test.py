@@ -108,6 +108,8 @@ axp_powf = AxpFxn("axp_powf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_
 axp_e_ex = AxpFxn("axp_e_ex", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), axp_size_t)
 axp_expf = AxpFxn("axp_expf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float))
 
+axp_expf_no_splitting = AxpFxn("axp_expf_no_splitting", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), axp_size_t)
+
 axp_itoa_alloc = AxpFxn("axp_itoa_alloc", c_char_p, POINTER(AXP_Ctx),  POINTER(AXP_Int))
 
 axp_itoa = AxpFxn("axp_itoa", c_size_t, POINTER(AXP_Int), c_void_p, c_size_t)
@@ -403,9 +405,9 @@ def run_all_tests() -> TestResults:
     ("Random Float Sub",       100_000,     _gen_binary_float(50, 30),        _run_subf),
     ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),        _run_mulf),
     ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
-    ("Random Float Pow",       100_000,     _gen_powf(3, 30, 20),             _run_powf),
+    ("Random Float Pow",       100_000,     _gen_powf(3, 30, 100),             _run_powf),
     ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],_run_e_check),
-    ("Random Exp",             100_000,     lambda: [gen_randomf(3, 2)],      _run_expf,    True), # Skip for now since it does not work...
+    ("Random Exp",             100_000,     lambda: [gen_randomf(3, 2, True)],      _run_expf,    True), # Skip for now since it does not work...
   ]
 
   results = TestResults()
