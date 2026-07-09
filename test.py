@@ -2,6 +2,7 @@ import ctypes
 from pathlib import Path
 import subprocess
 import random
+import json
 from tqdm import tqdm
 from dataclasses import dataclass, field
 import sys
@@ -13,6 +14,7 @@ sys.set_int_max_str_digits(0)
 
 ROOT_DIR = Path(__file__).parent
 LOG_PATH = ROOT_DIR / "test_log.txt"
+PREV_FAILED_PATH = ROOT_DIR / "prev_failed.txt"
 LIB_DIR = ROOT_DIR / "build" / "lib"
 LIB_NAME = "libaxp_.so" 
 LIB_PATH = LIB_DIR / LIB_NAME
@@ -50,6 +52,9 @@ class AXP_Ctx(Structure):
     ("precision", axp_size_t),
     ("err",       AXP_ErrorCode),
     ("err_str",   c_char * 1024),
+    ("fast_rounding", c_bool),
+    ("ziv_safety_digits", axp_size_t),
+    ("ziv_max_retries", axp_size_t),
   ]
  
  
@@ -122,6 +127,8 @@ axp_strerror = AxpFxn("axp_strerror",    c_char_p, POINTER(AXP_Ctx))
 
 ctx = AXP_Ctx()
 ctx.precision = 16
+ctx.fast_rounding = False
+_REF_GUARD_PREC = 50
 
 def gen_randomi(max_sz, only_pos=False):
   sz = random.randint(1, max_sz)
@@ -223,6 +230,14 @@ def _run_pow(x, y):
   axp_freei(byref(axp_x)); axp_freei(byref(axp_res))
   return result, x ** y, f"{x} ^ {y}"
 
+def _correctly_rounded(compute, target_prec):
+  getcontext().prec = target_prec + _REF_GUARD_PREC
+  getcontext().rounding = ROUND_HALF_UP
+  v = compute()
+  getcontext().prec = target_prec
+  getcontext().rounding = ROUND_HALF_UP
+  return +v
+
 def _run_addf(x_str, y_str):
   axp_x = str_to_axpf(x_str)
   axp_y = str_to_axpf(y_str)
@@ -280,9 +295,7 @@ def _run_powf(x_str, y):
   axp_res = AXP_Float()
   if not axp_powf(byref(ctx), byref(axp_x), y, byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
   result_str = str(axp_res)
-  getcontext().prec = ctx.precision
-  getcontext().rounding = ROUND_HALF_UP
-  expected = +Decimal(x_str) ** +Decimal(y)
+  expected = _correctly_rounded(lambda: Decimal(x_str) ** int(y), ctx.precision)
   actual = Decimal(result_str)
   axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
   return actual, expected, f"{x_str} ** {y}"
@@ -291,9 +304,7 @@ def _run_e_check(prec):
   axp_res = AXP_Float()
   if not axp_e_ex(byref(ctx), byref(axp_res), prec): raise Exception(axp_strerror(byref(ctx)))
   result_str = str(axp_res)
-  getcontext().prec = prec
-  getcontext().rounding = ROUND_HALF_UP
-  expected = +(+Decimal(1)).exp()
+  expected = _correctly_rounded(lambda: Decimal(1).exp(), prec)
   actual = Decimal(result_str)
   axp_freef(byref(axp_res))
   return actual, expected, f"e"
@@ -303,9 +314,7 @@ def _run_expf(x_str):
   axp_res = AXP_Float()
   if not axp_expf(byref(ctx), byref(axp_x), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
   result_str = str(axp_res)
-  getcontext().prec = ctx.precision
-  getcontext().rounding = ROUND_HALF_UP
-  expected = +Decimal(x_str).exp()
+  expected = _correctly_rounded(lambda: Decimal(x_str).exp(), ctx.precision)
   actual = Decimal(result_str)
   axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
   return actual, expected, f"e^{x_str}"
@@ -345,13 +354,33 @@ def _gen_powf(base_bits, max_exp, exponent_max):
   def gen():
     x, y = 0, 0
     while x == 0 and y == 0:
-        x = gen_randomf(base_bits, max_exp) # For now we only test positive exponents since negative exponents does not pass...
-        y = random.randint(0, exponent_max)
+        x = gen_randomf(base_bits, max_exp)
+        y = random.randint(-exponent_max, exponent_max)
     return x, y
   return gen
 
 def _gen_binary_float(bits, max_exp):
   return lambda: (gen_randomf(bits, max_exp), gen_randomf(bits, max_exp))
+
+def _load_prev_failed():
+  if not PREV_FAILED_PATH.exists(): return []
+  cases = []
+  with open(PREV_FAILED_PATH) as f:
+    for line in f:
+      line = line.strip()
+      if not line: continue
+      cases.append(json.loads(line))
+  return cases
+
+def _append_prev_failed(name, inputs):
+  line = json.dumps({"name": name, "inputs": list(inputs)})
+  existing = set()
+  if PREV_FAILED_PATH.exists():
+    with open(PREV_FAILED_PATH) as f:
+      existing = {l.strip() for l in f if l.strip()}
+  if line in existing: return
+  with open(PREV_FAILED_PATH, "a") as f:
+    f.write(line + "\n")
 
 def _format_failure(name, expr, got, expected):
   if isinstance(got, tuple):
@@ -381,6 +410,7 @@ def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, skip=F
       inputs = gen_inputs()
       got, expected, expr = run_op(*inputs)
       if got != expected:
+        _append_prev_failed(name, inputs)
         results.failed_cases.append(_format_failure(name, expr, got, expected))
         results.failed += 1
         results.total += i + 1
@@ -393,25 +423,62 @@ def _run_test(name, iterations, gen_inputs, run_op, results: TestResults, skip=F
   results.total += iterations
   print(f"{name}: {GREEN}Success{RESET}")
 
-def run_all_tests() -> TestResults:
-  tests = [
-    ("Random Integer Add",     100_000,     _gen_binary(100),                 _run_add),
-    ("Random Integer Sub",     100_000,     _gen_binary(100),                 _run_sub),
-    ("Random Integer Mul",     100_000,     _gen_binary(100),                 _run_mul),
-    ("Random Integer Div",     100_000,     _gen_div(100),                    _run_div),
-    ("Random Integer Pow",     100_000,     _gen_pow(3, 20),                  _run_pow),
-    ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),              _run_pow),
-    ("Random Float Add",       100_000,     _gen_binary_float(50, 30),        _run_addf),
-    ("Random Float Sub",       100_000,     _gen_binary_float(50, 30),        _run_subf),
-    ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),        _run_mulf),
-    ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
-    ("Random Float Pow",       100_000,     _gen_powf(3, 30, 100),             _run_powf),
-    ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],_run_e_check),
-    ("Random Exp",             100_000,     lambda: [gen_randomf(3, 2, True)],      _run_expf,    True), # Skip for now since it does not work...
-  ]
+def _run_prev_failed(results: TestResults, run_ops_by_name):
+  name = "Previously Failed"
+  cases = _load_prev_failed()
+  if not cases:
+    print(f"{name}: {YELLOW}Skipped (no cases recorded in {PREV_FAILED_PATH.name}){RESET}")
+    return
 
+  fails = 0
+  with tqdm(total=len(cases), leave=False) as t:
+    t.set_description(name)
+    for case in cases:
+      case_name = case["name"]
+      inputs = case["inputs"]
+      run_op = run_ops_by_name.get(case_name)
+      if run_op is None:
+        # Stale entry from a test that no longer exists - nothing to replay it against.
+        t.update(1)
+        continue
+      got, expected, expr = run_op(*inputs)
+      results.total += 1
+      if got != expected:
+        fails += 1
+        results.failed += 1
+        results.failed_cases.append(_format_failure(case_name, expr, got, expected))
+      t.update(1)
+
+  if fails:
+    print(f"{name}: {RED}Failed{RESET} ({fails}/{len(cases)} still failing)")
+  else:
+    print(f"{name}: {GREEN}Success{RESET} ({len(cases)} cases)")
+
+TESTS = [
+  ("Random Integer Add",     100_000,     _gen_binary(100),                 _run_add),
+  ("Random Integer Sub",     100_000,     _gen_binary(100),                 _run_sub),
+  ("Random Integer Mul",     100_000,     _gen_binary(100),                 _run_mul),
+  ("Random Integer Div",     100_000,     _gen_div(100),                    _run_div),
+  ("Random Integer Pow",     100_000,     _gen_pow(3, 20),                  _run_pow),
+  ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),              _run_pow),
+  ("Random Float Add",       100_000,     _gen_binary_float(50, 30),        _run_addf),
+  ("Random Float Sub",       100_000,     _gen_binary_float(50, 30),        _run_subf),
+  ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),        _run_mulf),
+  ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
+  ("Random Float Pow",       100_000,      _gen_powf(5, 30, 1000),            _run_powf),
+  ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],_run_e_check),
+  ("Random Exp",             100_000,      lambda: [gen_randomf(3, 2)],_run_expf,    False), # Skip for now since it does not work...
+]
+
+RUN_OPS_BY_NAME = {t[0]: t[3] for t in TESTS}
+
+def run_all_tests() -> TestResults:
+  ctx.fast_rounding = False
   results = TestResults()
-  for name, iterations, gen_inputs, run_op, *args in tests:
+
+  _run_prev_failed(results, RUN_OPS_BY_NAME)
+
+  for name, iterations, gen_inputs, run_op, *args in TESTS:
     _run_test(name, iterations, gen_inputs, run_op, results, *args)
 
   color = RED if results.failed > 0 else GREEN

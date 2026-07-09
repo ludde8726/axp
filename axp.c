@@ -454,6 +454,41 @@ void axp_shri(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift) {
     x->size -= shift;
 }
 
+axp_size_t axp__round_digits_into(axp_digit_t *src, axp_size_t src_sz, axp_digit_t *dst, axp_size_t dst_sz, axp_size_t *out_shift) {
+    axp_size_t shift = (src_sz > dst_sz) ? (src_sz - dst_sz) : 0;
+    if (shift > 0 && src[shift - 1] >= 5) {
+        axp_digit_t carry = 1;
+        axp_size_t i;
+        for (i = shift; i < src_sz && carry; i++) {
+            axp_digit_t sum = src[i] + carry;
+            src[i] = sum % BASE;
+            carry = sum / BASE;
+        }
+        if (carry) {
+            axp_size_t sz = src_sz - shift;
+            memset(dst, 0, sz * sizeof(axp_digit_t));
+            dst[sz - 1] = 1;
+            if (out_shift) *out_shift = shift + 1;
+            return sz;
+        }
+    }
+    axp_size_t sz = src_sz - shift;
+    memcpy(dst, src + shift, sz * sizeof(axp_digit_t));
+    if (out_shift) *out_shift = shift;
+    return sz;
+}
+
+static bool axp__round_is_unambiguous(const axp_digit_t *digits, axp_size_t safety) {
+    if (safety == 0) return true;
+    axp_digit_t boundary = digits[safety - 1];
+    if (boundary != 4 && boundary != 5) return true;
+    axp_digit_t chase = (boundary == 4) ? 9 : 0;
+    for (axp_size_t i = safety - 1; i-- > 0;) {
+        if (digits[i] != chase) return true;
+    }
+    return false;
+}
+
 void axp_align_float_digits(AXP_Float *x, AXP_Float *y) {
     if (x->exponent == y->exponent) return;
 
@@ -985,6 +1020,7 @@ axp_size_t axp__pow_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y,
     }
     return res_sz;
 }
+
 axp_size_t axp__pow_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t y, axp_digit_t *tmp_buf, axp_digit_t *res, axp_size_t res_cap, axp_exp_t *exp_adj) {
     res[0] = 1;
     axp_size_t res_sz = 1;
@@ -998,18 +1034,16 @@ axp_size_t axp__pow_digits_float(axp_digit_t *x_digits, axp_size_t x_sz, axp_siz
 
         if (remainder) {
             axp_size_t prod_sz = axp__mul_digits(res, res_sz, x_digits, x_sz, tmp_buf);
-            axp_size_t shift = (prod_sz > res_cap) ? (prod_sz - res_cap) : 0;
-            res_sz = prod_sz - shift;
-            memcpy(res, tmp_buf + shift, res_sz * sizeof(axp_digit_t));
+            axp_size_t shift;
+            res_sz = axp__round_digits_into(tmp_buf, prod_sz, res, res_cap, &shift);
             memset(tmp_buf, 0, prod_sz * sizeof(axp_digit_t));
             *exp_adj += (axp_exp_t)shift + x_exp_adj;
         }
 
         if (y != 0) {
             axp_size_t prod_sz = axp__mul_digits(x_digits, x_sz, x_digits, x_sz, tmp_buf);
-            axp_size_t shift = (prod_sz > res_cap) ? (prod_sz - res_cap) : 0;
-            x_sz = prod_sz - shift;
-            memcpy(x_digits, tmp_buf + shift, x_sz * sizeof(axp_digit_t));
+            axp_size_t shift;
+            x_sz = axp__round_digits_into(tmp_buf, prod_sz, x_digits, res_cap, &shift);
             memset(tmp_buf, 0, prod_sz * sizeof(axp_digit_t));
             x_exp_adj = 2 * x_exp_adj + (axp_exp_t)shift;
         }
@@ -1066,6 +1100,87 @@ bool axp_powf(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res) {
     return axp_powf_ex(ctx, x, y, res, ctx->precision);
 }
 
+static bool axp__powf_attempt(AXP_Ctx *ctx, const AXP_Float *x, axp_exp_t y, axp_size_t abs_y, axp_size_t guard, axp_size_t precision, axp_size_t extra, AXP_Float *out, bool *ambiguous) {
+    axp_size_t prec = precision + guard + extra;
+
+    AXP_Float x_cpy = { 0 };
+    AXP_Float tmp_buf = { 0 };
+    AXP_Float res = { 0 };
+    if (!axp_initf_ex(ctx, &res, prec)) return false;
+    if (!axp_initf_ex(ctx, &tmp_buf, 2 * prec)) { axp_freef(&res); return false; }
+    if (!axp_copyf_ex(ctx, &x_cpy, x, prec)) { axp_freef(&res); axp_freef(&tmp_buf); return false; }
+
+    axp_exp_t exp_adj;
+    res.size = axp__pow_digits_float(x_cpy.digits, x_cpy.size, abs_y, tmp_buf.digits, res.digits, prec, &exp_adj);
+    axp_freef(&tmp_buf);
+
+    if (axp__mul_exp_overflow(x->exponent, (axp_exp_t)abs_y)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` (%lld * %u)", x->exponent, abs_y);
+        axp_freef(&res); axp_freef(&x_cpy);
+        return false;
+    }
+    res.exponent = x->exponent * (axp_exp_t)abs_y;
+    if (axp__add_exp_overflow(res.exponent, exp_adj)) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` (%lld + %lld)", res.exponent, exp_adj);
+        axp_freef(&res); axp_freef(&x_cpy);
+        return false;
+    }
+    res.exponent += exp_adj;
+    res.sign = (abs_y % 2) && x->sign;
+    axp_normalizef(&res);
+    axp_freef(&x_cpy);
+
+    if (y >= 0) {
+        axp_size_t safety = (res.size > precision) ? (res.size - precision) : 0;
+        *ambiguous = !axp__round_is_unambiguous(res.digits, safety);
+        *out = res;
+        axp_error_reset(ctx);
+        return true;
+    }
+    axp_size_t target = precision + extra;
+    AXP_Float one = { 0 };
+    AXP_Float recip_raw = { 0 };
+    AXP_Float res_cpy = { 0 };
+    if (!axp_initf_ex(ctx, &one, prec + 2)) { axp_freef(&res); return false; }
+    one.digits[0] = 1;
+    one.size = 1;
+    if (!axp_initf_ex(ctx, &recip_raw, target + 1)) { axp_freef(&res); axp_freef(&one); return false; }
+    if (!axp_copyf_ex_round(ctx, &res_cpy, &res, prec)) {
+        axp_freef(&res); axp_freef(&one); axp_freef(&recip_raw);
+        return false;
+    }
+
+    axp_exp_t div_exp_adj;
+    axp_size_t recip_raw_sz = axp__div_digits_float(one.digits, one.size, res_cpy.digits, res_cpy.size, recip_raw.digits, target + 1, &div_exp_adj);
+    recip_raw.size = recip_raw_sz;
+    recip_raw.sign = res.sign;
+
+    bool overflow = axp__sub_exp_overflow(0, res.exponent);
+    axp_exp_t base_exp = 0;
+    if (!overflow) {
+        base_exp = -res.exponent;
+        overflow = axp__add_exp_overflow(base_exp, div_exp_adj);
+    }
+
+    axp_freef(&one);
+    axp_freef(&res_cpy);
+    axp_freef(&res);
+
+    if (overflow) {
+        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` reciprocal");
+        axp_freef(&recip_raw);
+        return false;
+    }
+    recip_raw.exponent = base_exp + div_exp_adj;
+    axp_normalizef(&recip_raw);
+
+    axp_size_t safety = (recip_raw.size > precision) ? (recip_raw.size - precision) : 0;
+    *ambiguous = !axp__round_is_unambiguous(recip_raw.digits, safety);
+    *out = recip_raw;
+    axp_error_reset(ctx);
+    return true;
+}
+
 bool axp_powf_ex(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res, axp_size_t precision) {
     bool x_zero;
     if (!axp_is_zerof(ctx, x, &x_zero)) return false;
@@ -1097,83 +1212,23 @@ bool axp_powf_ex(AXP_Ctx *ctx, AXP_Float *x, axp_exp_t y, AXP_Float *res, axp_si
     while (tmp_y > 1) { guard++; tmp_y >>= 1; }
     guard += 1;
 
-    axp_size_t prec = precision + guard;
+    axp_size_t extra = ctx->fast_rounding ? (axp_size_t)(y < 0 ? 1 : 0) : (ctx->ziv_safety_digits ? ctx->ziv_safety_digits : AXP_ZIV_DEFAULT_SAFETY_DIGITS);
+    axp_size_t max_attempts = ctx->fast_rounding ? 1 : (ctx->ziv_max_retries ? ctx->ziv_max_retries : AXP_ZIV_DEFAULT_MAX_RETRIES);
 
-    AXP_Float x_cpy = { 0 };
-    AXP_Float tmp_buf = { 0 };
-
-    if (!axp_initf_ex(ctx, res, prec)) goto cleanup_error;
-    if (!axp_initf_ex(ctx, &tmp_buf, 2 * prec)) goto cleanup_error;
-    if (!axp_copyf_ex(ctx, &x_cpy, x, prec)) goto cleanup_error;
-
-    axp_exp_t exp_adj;
-    // Check for x->exponent * y
-    res->size = axp__pow_digits_float(x_cpy.digits, x_cpy.size, abs_y, tmp_buf.digits, res->digits, prec, &exp_adj);
-    if (axp__mul_exp_overflow(x->exponent, (axp_exp_t)abs_y)) {
-        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` (%lld * %u)", x->exponent, abs_y);
-        goto cleanup_error;
-    }
-    res->exponent = x->exponent * (axp_exp_t)abs_y;
-    // Check for x->exponent * y + exp_ajd
-    if (axp__add_exp_overflow(res->exponent, exp_adj)) {
-        axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` (%lld + %lld)", res->exponent, exp_adj);
-        goto cleanup_error;
-    }
-    res->exponent += exp_adj;
-    res->sign = (abs_y % 2) && x->sign;
-
-    axp_normalizef(res);
-
-    if (y < 0) {
-        AXP_Float one    = { 0 };
-        AXP_Float recip  = { 0 };
-        AXP_Float res_cpy = { 0 };
-        if (!axp_initf_ex(ctx, &one, prec+1)) goto cleanup_neg_error; // Don't know why but for some reason we need + 1 capacity on the dividend
-
-        one.digits[0] = 1;
-        one.size = 1;
-        if (!axp_initf_ex(ctx, &recip, prec)) goto cleanup_neg_error;
-        if (!axp_copyf_ex_round(ctx, &res_cpy, res, prec)) goto cleanup_neg_error;
-        axp_exp_t div_exp_adj;
-        axp_size_t recip_sz = axp__div_digits_float(one.digits, one.size, res_cpy.digits, res_cpy.size, recip.digits, prec, &div_exp_adj);
-        recip.size = recip_sz;
-        recip.sign = res->sign;
-        if (axp__sub_exp_overflow(0, res->exponent)) {
-            axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` reciprocal (0 - %lld)", res->exponent);
-            goto cleanup_neg_error;
+    for (axp_size_t attempt = 0; attempt < max_attempts; attempt++) {
+        AXP_Float candidate = { 0 };
+        bool ambiguous = false;
+        if (!axp__powf_attempt(ctx, x, y, abs_y, guard, precision, extra, &candidate, &ambiguous)) return false;
+        if (ctx->fast_rounding || !ambiguous || attempt + 1 == max_attempts) {
+            *res = candidate;
+            if (!axp_reallocf_round(ctx, res, precision)) return false;
+            axp_error_reset(ctx);
+            return true;
         }
-        recip.exponent = -res->exponent;
-        if (axp__add_exp_overflow(recip.exponent, div_exp_adj)) {
-            axp_throw(ctx, AXP_ERR_OVERFLOW, "Exponent overflow in `axp_powf` reciprocal (%lld + %lld)", recip.exponent, div_exp_adj);
-            goto cleanup_neg_error;
-        }
-        recip.exponent += div_exp_adj;
-        axp_normalizef(&recip);
-        if (!axp_reallocf_round(ctx, &recip, precision)) goto cleanup_neg_error;
-        axp_freef(&one);
-        axp_freef(&res_cpy);
-        axp_freef(res);
-        *res = recip;
-        goto cleanup_success;
-
-    cleanup_neg_error:
-        axp_freef(&one);
-        axp_freef(&recip);
-        axp_freef(&res_cpy);
-        goto cleanup_error;
+        axp_freef(&candidate);
+        extra *= 2;
     }
-
-    if (!axp_reallocf_round(ctx, res, precision)) goto cleanup_error;
-
-cleanup_success:
-    axp_freef(&tmp_buf);
-    axp_freef(&x_cpy);
-    axp_error_reset(ctx);
-    return true;
-cleanup_error:
-    axp_freef(res);
-    axp_freef(&x_cpy);
-    axp_freef(&tmp_buf);
+    UNREACHABLE("axp_powf_ex retry loop should always return");
     return false;
 }
 
@@ -1252,11 +1307,38 @@ bool axp_expf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res) {
     return axp_expf_ex(ctx, x, res, ctx->precision);
 }
 
-bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision) {
+static bool axp__expf_attempt(AXP_Ctx *ctx, const AXP_Float *x, axp_size_t precision, axp_size_t extra, AXP_Float *out, bool *ambiguous) {
     axp_size_t guard = 0;
     axp_size_t tmp_precision = precision;
     while (tmp_precision) { guard++; tmp_precision /= 10; }
-    axp_size_t workprec = precision + guard + 5;
+
+    // Calculate pow guard
+    AXP_Float x_probe = { 0 };
+    if (!axp_copyf_exact(ctx, &x_probe, x)) return false;
+    x_probe.sign = 0;
+
+    AXP_Int n_probe = { 0 };
+    AXP_Float frac_probe = { 0 };
+    if (!axp_floorf(ctx, &x_probe, &n_probe, &frac_probe)) { axp_freef(&x_probe); return false; }
+
+    // TODO: Overflow check
+    axp_exp_t n = 0;
+    for (axp_size_t i = n_probe.size; i > 0; i--) {
+        n *= 10;
+        n += n_probe.digits[i-1];
+    }
+    axp_freef(&x_probe);
+    axp_freef(&frac_probe);
+    axp_freei(&n_probe);
+
+    axp_size_t pow_guard = 0;
+    if (n != 0) {
+        axp_size_t tmp_n = (axp_size_t)n;
+        while (tmp_n > 1) { pow_guard++; tmp_n >>= 1; }
+        pow_guard += 1;
+    }
+
+    axp_size_t workprec = precision + guard + extra + pow_guard;
 
     AXP_Float x_abs = { 0 };
     if (!axp_copyf_ex(ctx, &x_abs, x, workprec)) return false;
@@ -1266,18 +1348,12 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
     AXP_Int int_part = { 0 };
     if (!axp_floorf(ctx, &x_abs, &int_part, &frac)) goto cleanup_error;
 
-    // TODO: Overflow check
-    axp_exp_t n = 0;
-    for (axp_size_t i = int_part.size; i > 0; i--) {
-        n *= 10;
-        n += int_part.digits[i-1];
-    }
-
+    AXP_Float res = { 0 };
     AXP_Float term = { 0 };
     AXP_Float scratch = { 0 };
     AXP_Float mul_buf  = { 0 };
     AXP_Float threshold = { 0 };
-    if (!axp_initf_ex(ctx, res, workprec)) goto cleanup_error;
+    if (!axp_initf_ex(ctx, &res, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &term, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &scratch, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &mul_buf, workprec * 2)) goto cleanup_error;
@@ -1285,11 +1361,11 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
 
     threshold.digits[0] = 1;
     threshold.size = 1;
-    threshold.exponent = -(axp_exp_t)(precision + guard);
+    threshold.exponent = -(axp_exp_t)workprec;
 
     // First iteration just sets res to x^0/0! = 1
-    res->digits[0] = 1;
-    res->size = 1;
+    res.digits[0] = 1;
+    res.size = 1;
 
     term.digits[0] = 1;
     term.size = 1;
@@ -1317,11 +1393,11 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
         if (!axp_abs_cmpf(ctx, &term, &threshold, &cmp)) goto cleanup_error;
         if (cmp < 0) break;
 
-        axp_align_float_digits(res, &term);
-        scratch.size = axp__add_digits(res->digits, res->size, term.digits, term.size, scratch.digits);
-        scratch.exponent = res->exponent;
+        axp_align_float_digits(&res, &term);
+        scratch.size = axp__add_digits(res.digits, res.size, term.digits, term.size, scratch.digits);
+        scratch.exponent = res.exponent;
         scratch.sign = 0;
-        axp__swapf(res, &scratch);
+        axp__swapf(&res, &scratch);
         memset(scratch.digits, 0, scratch.capacity * sizeof(axp_digit_t));
         scratch.size = 1;
         scratch.exponent = 0;
@@ -1335,9 +1411,9 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
 
         if (!axp_e_ex(ctx, &e_val, workprec)) goto cleanup_error;
 
-        if (!axp_initf_ex(ctx, &tmp, workprec * 2)) { axp_freef(&tmp); goto cleanup_error; }
-        if (!axp_initf_ex(ctx, &e_n, workprec)) { axp_freef(&tmp); axp_freef(&tmp); goto cleanup_error; }
-        
+        if (!axp_initf_ex(ctx, &tmp, workprec * 2)) { axp_freef(&e_val); goto cleanup_error; }
+        if (!axp_initf_ex(ctx, &e_n, workprec)) { axp_freef(&e_val); axp_freef(&tmp); goto cleanup_error; }
+
         axp_exp_t exp_adj;
         axp_size_t prod_sz = axp__pow_digits_float(e_val.digits, e_val.size, (axp_size_t)n, tmp.digits, e_n.digits, workprec, &exp_adj);
         e_n.size = prod_sz;
@@ -1350,17 +1426,17 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
         AXP_Float final = { 0 };
         if (!axp_initf_ex(ctx, &final, workprec * 2)) { axp_freef(&e_n); goto cleanup_error; }
 
-        axp_size_t final_sz = axp__mul_digits(res->digits, res->size, e_n.digits, e_n.size, final.digits);
+        axp_size_t final_sz = axp__mul_digits(res.digits, res.size, e_n.digits, e_n.size, final.digits);
         axp_size_t shift = (final_sz > workprec) ? (final_sz - workprec) : 0;
         final.size = final_sz - shift;
         memmove(final.digits, final.digits + shift, final.size * sizeof(axp_digit_t));
         memset(final.digits + final.size, 0, shift * sizeof(axp_digit_t));
-        final.exponent = res->exponent + e_n.exponent + (axp_exp_t)shift;
+        final.exponent = res.exponent + e_n.exponent + (axp_exp_t)shift;
         final.sign = 0;
 
         axp_freef(&e_n);
-        axp_freef(res);
-        *res = final;
+        axp_freef(&res);
+        res = final;
     }
 
     if (x->sign) {
@@ -1373,25 +1449,24 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
         one.size = 1;
 
         if (!axp_initf_ex(ctx, &recip, workprec)) { axp_freef(&one); goto cleanup_error; }
-        if (!axp_copyf_exact(ctx, &res_cpy, res)) { axp_freef(&one); axp_freef(&recip); goto cleanup_error; }
+        if (!axp_copyf_exact(ctx, &res_cpy, &res)) { axp_freef(&one); axp_freef(&recip); goto cleanup_error; }
 
         axp_exp_t div_exp_adj;
         axp_size_t recip_sz = axp__div_digits_float(one.digits, one.size, res_cpy.digits, res_cpy.size, recip.digits, workprec, &div_exp_adj);
         recip.size = recip_sz;
         recip.sign = 0;
-        recip.exponent = -res->exponent + div_exp_adj;
+        recip.exponent = -res.exponent + div_exp_adj;
 
         axp_normalizef(&recip);
 
         axp_freef(&one);
         axp_freef(&res_cpy);
-        axp_freef(res);
+        axp_freef(&res);
 
-        *res = recip;
+        res = recip;
     }
 
-    axp_normalizef(res);
-    if (!axp_reallocf_round(ctx, res, precision)) goto cleanup_error;
+    axp_normalizef(&res);
 
     axp_freef(&x_abs);
     axp_freef(&frac);
@@ -1400,6 +1475,12 @@ bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pr
     axp_freef(&scratch);
     axp_freef(&mul_buf);
     axp_freef(&threshold);
+
+    axp_size_t safety = (res.size > precision) ? (res.size - precision) : 0;
+    *ambiguous = !axp__round_is_unambiguous(res.digits, safety);
+    *out = res;
+
+    axp_error_reset(ctx);
     return true;
 
 cleanup_error:
@@ -1410,7 +1491,28 @@ cleanup_error:
     axp_freef(&scratch);
     axp_freef(&mul_buf);
     axp_freef(&threshold);
-    axp_freef(res);
+    axp_freef(&res);
+    return false;
+}
+
+bool axp_expf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision) {
+    axp_size_t extra = ctx->fast_rounding ? (axp_size_t)(5 + (x->sign ? 1 : 0)) : (ctx->ziv_safety_digits ? ctx->ziv_safety_digits : AXP_ZIV_DEFAULT_SAFETY_DIGITS);
+    axp_size_t max_attempts = ctx->fast_rounding ? 1 : (ctx->ziv_max_retries ? ctx->ziv_max_retries : AXP_ZIV_DEFAULT_MAX_RETRIES);
+
+    for (axp_size_t attempt = 0; attempt < max_attempts; attempt++) {
+        AXP_Float candidate = { 0 };
+        bool ambiguous = false;
+        if (!axp__expf_attempt(ctx, x, precision, extra, &candidate, &ambiguous)) return false;
+        if (ctx->fast_rounding || !ambiguous || attempt + 1 == max_attempts) {
+            *res = candidate;
+            if (!axp_reallocf_round(ctx, res, precision)) return false;
+            axp_error_reset(ctx);
+            return true;
+        }
+        axp_freef(&candidate);
+        extra *= 2;
+    }
+    UNREACHABLE("axp_expf_ex retry loop should always return");
     return false;
 }
 
@@ -1425,13 +1527,11 @@ bool axp_expf_no_splitting(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp
     x_abs.sign = 0;
 
     AXP_Float term = { 0 };
-    AXP_Float term_tmp = { 0 };
     AXP_Float scratch = { 0 };
     AXP_Float mul_buf  = { 0 };
     AXP_Float threshold = { 0 };
     if (!axp_initf_ex(ctx, res, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &term, workprec)) goto cleanup_error;
-    // if (!axp_initf_ex(ctx, &term_tmp, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &scratch, workprec)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &mul_buf, workprec * 2)) goto cleanup_error;
     if (!axp_initf_ex(ctx, &threshold, workprec)) goto cleanup_error;
@@ -1486,7 +1586,6 @@ bool axp_expf_no_splitting(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp
 
     axp_freef(&x_abs);
     axp_freef(&term);
-    // axp_freef(&term_tmp);
     axp_freef(&scratch);
     axp_freef(&mul_buf);
     axp_freef(&threshold);
@@ -1495,7 +1594,6 @@ bool axp_expf_no_splitting(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp
 cleanup_error:
     axp_freef(&x_abs);
     axp_freef(&term);
-    axp_freef(&term_tmp);
     axp_freef(&scratch);
     axp_freef(&mul_buf);
     axp_freef(&threshold);

@@ -21,6 +21,9 @@
 
 #define BASE 10
 
+#define AXP_ZIV_DEFAULT_SAFETY_DIGITS 8
+#define AXP_ZIV_DEFAULT_MAX_RETRIES 8
+
 typedef uint8_t axp_digit_t;
 typedef uint32_t axp_size_t;
 typedef int64_t axp_exp_t;
@@ -41,6 +44,10 @@ typedef struct {
     axp_size_t precision;
     AXP_ErrorCode err;
     char err_str[1024];
+    
+    bool fast_rounding;
+    axp_size_t ziv_safety_digits;
+    axp_size_t ziv_max_retries;
 } AXP_Ctx;
 
 typedef struct {
@@ -136,6 +143,8 @@ axp_size_t axp__shli_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t s
 void axp_shli(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift);
 axp_size_t axp__shri_digits(axp_digit_t *x_digits, axp_size_t x_sz, axp_size_t shift);
 void axp_shri(AXP_Ctx *ctx, AXP_Int *x, axp_size_t shift);
+
+axp_size_t axp__round_digits_into(axp_digit_t *src, axp_size_t src_sz, axp_digit_t *dst, axp_size_t dst_sz, axp_size_t *out_shift);
 
 void axp_align_float_digits(AXP_Float *x, AXP_Float *y);
 

@@ -1,0 +1,9 @@
+{"name": "Random Integer Add", "inputs": [-3, -79311]}
+{"name": "Random Integer Add", "inputs": [-142719276983306357276793751613492579004872715268123672659355307679141939267176854, -359064759431094470232893388006339766571162373713970857044615853032624197]}
+{"name": "Random Float Pow", "inputs": ["-0.902", -15]}
+{"name": "Random Float Pow", "inputs": ["-0.000000000000037", -26]}
+{"name": "Random Float Pow", "inputs": ["-0.0646", -29]}
+{"name": "Random Float Pow", "inputs": ["-0.0000000000000000030004", -7]}
+{"name": "Random Float Pow", "inputs": ["-44.734", -427]}
+{"name": "Random Float Pow", "inputs": ["77000000.0", -679]}
+{"name": "Random Float Pow", "inputs": ["-124800000000.0", -286]}
