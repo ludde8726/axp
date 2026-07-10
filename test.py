@@ -6,11 +6,17 @@ import json
 from tqdm import tqdm
 from dataclasses import dataclass, field
 import sys
-from decimal import Decimal, getcontext, ROUND_HALF_UP
+from decimal import Decimal, getcontext, ROUND_HALF_UP, MAX_EMAX, MIN_EMIN
 
 from ctypes import c_uint8, c_uint32, c_int64, c_int, c_size_t, c_char_p, c_char, byref, c_bool, c_void_p, POINTER, Structure, create_string_buffer
 
 sys.set_int_max_str_digits(0)
+# axp_exp_t has way more range than Decimal's default Emax/Emin (~1e6), which
+# Random Powff can legitimately exceed (e.g. a large base raised to a large
+# exponent) - widen it so the reference computation doesn't underflow/overflow
+# on inputs axp itself handles fine.
+getcontext().Emax = MAX_EMAX
+getcontext().Emin = MIN_EMIN
 
 ROOT_DIR = Path(__file__).parent
 LOG_PATH = ROOT_DIR / "test_log.txt"
@@ -116,6 +122,8 @@ axp_expf = AxpFxn("axp_expf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POIN
 axp_expf_no_splitting = AxpFxn("axp_expf_no_splitting", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), axp_size_t)
 
 axp_lnf = AxpFxn("axp_lnf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float))
+
+axp_powff = AxpFxn("axp_powff", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), POINTER(AXP_Float))
 
 axp_itoa_alloc = AxpFxn("axp_itoa_alloc", c_char_p, POINTER(AXP_Ctx),  POINTER(AXP_Int))
 
@@ -331,6 +339,17 @@ def _run_lnf(x_str):
   axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
   return actual, expected, f"ln({x_str})"
 
+def _run_powff(x_str, y_str):
+  axp_x = str_to_axpf(x_str)
+  axp_y = str_to_axpf(y_str)
+  axp_res = AXP_Float()
+  if not axp_powff(byref(ctx), byref(axp_x), byref(axp_y), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  expected = _correctly_rounded(lambda: Decimal(x_str) ** Decimal(y_str), ctx.precision)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_y)); axp_freef(byref(axp_res))
+  return actual, expected, f"{x_str} ** {y_str}"
+
 # Input generators
 
 def _gen_binary(bits):
@@ -373,6 +392,9 @@ def _gen_powf(base_bits, max_exp, exponent_max):
 
 def _gen_binary_float(bits, max_exp):
   return lambda: (gen_randomf(bits, max_exp), gen_randomf(bits, max_exp))
+
+def _gen_powff(base_bits, base_max_exp, exp_bits, exp_max_exp):
+  return lambda: (gen_randomf(base_bits, base_max_exp, only_pos=True), gen_randomf(exp_bits, exp_max_exp))
 
 def _load_prev_failed():
   if not PREV_FAILED_PATH.exists(): return []
@@ -481,6 +503,7 @@ TESTS = [
   ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],          _run_e_check),
   ("Random Exp",             100_000,     lambda: [gen_randomf(3, 2)],                _run_expf),
   ("Random Ln",              100_000,     lambda: [gen_randomf(5, 30, only_pos=True)],_run_lnf),
+  ("Random Powff",           5_000,       _gen_powff(5, 15, 4, 3),                    _run_powff),
 ]
 
 RUN_OPS_BY_NAME = {t[0]: t[3] for t in TESTS}

@@ -59,6 +59,72 @@ static inline bool axp__mul_exp_overflow(axp_exp_t x, axp_exp_t y) {
     return x < max_val / y;
 }
 
+static double axp__lnf_seed(const AXP_Float *x) {
+    axp_size_t take = x->size < 17 ? x->size : 17;
+    double mantissa = 0.0;
+    for (axp_size_t i = 0; i < take; i++) {
+        mantissa = mantissa * 10.0 + (double)x->digits[x->size - 1 - i];
+    }
+    axp_exp_t exp_part = x->exponent + (axp_exp_t)(x->size - take);
+    return log(mantissa) + (double)exp_part * log(10.0);
+}
+
+static double axp__float_to_double(const AXP_Float *x) {
+    axp_size_t take = x->size < 17 ? x->size : 17;
+    double mantissa = 0.0;
+    for (axp_size_t i = 0; i < take; i++) {
+        mantissa = mantissa * 10.0 + (double)x->digits[x->size - 1 - i];
+    }
+    double val = mantissa * pow(10.0, (double)(x->exponent + (axp_exp_t)(x->size - take)));
+    return x->sign ? -val : val;
+}
+
+static bool axp__double_to_float(AXP_Ctx *ctx, double val, AXP_Float *out) {
+    uint8_t sign = 0;
+    if (val < 0) {
+        sign = 1;
+        val = -val;
+    }
+    if (val == 0.0) {
+        if (!axp_initf_ex(ctx, out, 1)) return false;
+        out->digits[0] = 0;
+        out->size = 1;
+        return true;
+    }
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.17e", val);
+
+    if (!axp_initf_ex(ctx, out, 18)) return false;
+
+    axp_size_t sz = 0;
+    char *scan = buf;
+    while (*scan && *scan != 'e') {
+        if (*scan != '.') out->digits[sz++] = (axp_digit_t)(*scan - '0');
+        scan++;
+    }
+
+    axp_exp_t str_exp = 0;
+    int8_t exp_sign = 1;
+    scan++; // skip 'e'
+    if (*scan == '-') { exp_sign = -1; scan++; }
+    else if (*scan == '+') scan++;
+    while (*scan) str_exp = str_exp * 10 + (*scan++ - '0');
+    str_exp *= exp_sign;
+
+    for (axp_size_t i = 0; i < sz / 2; i++) {
+        axp_digit_t tmp = out->digits[i];
+        out->digits[i] = out->digits[sz - 1 - i];
+        out->digits[sz - 1 - i] = tmp;
+    }
+
+    out->size = sz;
+    out->exponent = str_exp - (axp_exp_t)(sz - 1);
+    out->sign = sign;
+    axp_normalizef(out);
+    return true;
+}
+
 // ------- Allocation -------
 
 bool axp_initi(AXP_Ctx *ctx, AXP_Int *x, axp_size_t initial_capacity)
@@ -1605,64 +1671,6 @@ bool axp_lnf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res) {
     return axp_lnf_ex(ctx, x, res, ctx->precision);
 }
 
-static double axp__lnf_seed(const AXP_Float *x) {
-    axp_size_t take = x->size < 17 ? x->size : 17;
-    double mantissa = 0.0;
-    for (axp_size_t i = 0; i < take; i++) {
-        mantissa = mantissa * 10.0 + (double)x->digits[x->size - 1 - i];
-    }
-    axp_exp_t exp_part = x->exponent + (axp_exp_t)(x->size - take);
-    return log(mantissa) + (double)exp_part * log(10.0);
-}
-
-// Note: This function is only used to create a good approximation of logx to start the iterations. 
-// It should never be used on its own.
-static bool axp__double_to_float(AXP_Ctx *ctx, double val, AXP_Float *out) {
-    uint8_t sign = 0;
-    if (val < 0) {
-        sign = 1;
-        val = -val;
-    }
-    if (val == 0.0) {
-        if (!axp_initf_ex(ctx, out, 1)) return false;
-        out->digits[0] = 0;
-        out->size = 1;
-        return true;
-    }
-
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%.17e", val);
-
-    if (!axp_initf_ex(ctx, out, 18)) return false;
-
-    axp_size_t sz = 0;
-    char *scan = buf;
-    while (*scan && *scan != 'e') {
-        if (*scan != '.') out->digits[sz++] = (axp_digit_t)(*scan - '0');
-        scan++;
-    }
-
-    axp_exp_t str_exp = 0;
-    int8_t exp_sign = 1;
-    scan++; // skip 'e'
-    if (*scan == '-') { exp_sign = -1; scan++; }
-    else if (*scan == '+') scan++;
-    while (*scan) str_exp = str_exp * 10 + (*scan++ - '0');
-    str_exp *= exp_sign;
-
-    for (axp_size_t i = 0; i < sz / 2; i++) {
-        axp_digit_t tmp = out->digits[i];
-        out->digits[i] = out->digits[sz - 1 - i];
-        out->digits[sz - 1 - i] = tmp;
-    }
-
-    out->size = sz;
-    out->exponent = str_exp - (axp_exp_t)(sz - 1);
-    out->sign = sign;
-    axp_normalizef(out);
-    return true;
-}
-
 static bool axp__lnf_attempt(AXP_Ctx *ctx, const AXP_Float *x, axp_size_t precision, axp_size_t extra, AXP_Float *out, bool *ambiguous) {
     axp_size_t guard = 0;
     axp_size_t tmp_precision = precision;
@@ -1750,6 +1758,118 @@ bool axp_lnf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t pre
         extra *= 2;
     }
     UNREACHABLE("axp_lnf_ex retry loop should always return");
+    return false;
+}
+
+bool axp_powff(AXP_Ctx *ctx, AXP_Float *x, const AXP_Float *y, AXP_Float *res) {
+    return axp_powff_ex(ctx, x, y, res, ctx->precision);
+}
+
+static bool axp__powff_attempt(AXP_Ctx *ctx, AXP_Float *x, const AXP_Float *y, axp_size_t precision, axp_size_t extra, AXP_Float *out, bool *ambiguous) {
+    axp_size_t guard = 0;
+    axp_size_t tmp_precision = precision;
+    while (tmp_precision) { guard++; tmp_precision /= 10; }
+
+    double exponent_est = axp__float_to_double(y) * axp__lnf_seed(x);
+    axp_size_t amp_guard = 1;
+    if (isfinite(exponent_est) && fabs(exponent_est) > 1.0) {
+        amp_guard += (axp_size_t)ceil(log10(fabs(exponent_est)));
+    }
+
+    axp_size_t workprec = precision + guard + extra + amp_guard;
+
+    AXP_Float ln_x = { 0 };
+    if (!axp_lnf_ex(ctx, x, &ln_x, workprec)) return false;
+
+    AXP_Float exponent = { 0 };
+    bool ok = axp_mulf_ex(ctx, y, &ln_x, &exponent, workprec);
+    axp_freef(&ln_x);
+    if (!ok) return false;
+
+    AXP_Float result = { 0 };
+    ok = axp_expf_ex(ctx, &exponent, &result, workprec);
+    axp_freef(&exponent);
+    if (!ok) return false;
+
+    axp_size_t safety = (result.size > precision) ? (result.size - precision) : 0;
+    *ambiguous = !axp__round_is_unambiguous(result.digits, safety);
+    *out = result;
+    axp_error_reset(ctx);
+    return true;
+}
+
+bool axp_powff_ex(AXP_Ctx *ctx, AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision) {
+    bool x_zero, y_zero;
+    if (!axp_is_zerof(ctx, x, &x_zero)) return false;
+    if (!axp_is_zerof(ctx, y, &y_zero)) return false;
+
+    if (x_zero && y_zero) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "0^0 is undefined.");
+        return false;
+    }
+    if (x_zero) {
+        if (y->sign) {
+            axp_throw(ctx, AXP_ERR_DIV_ZERO, "0^negative is undefined.");
+            return false;
+        }
+        if (!axp_initf_ex(ctx, res, precision)) return false;
+        res->size = 1;
+        return true;
+    }
+    if (y_zero) {
+        if (!axp_initf_ex(ctx, res, precision)) return false;
+        res->digits[0] = 1;
+        res->size = 1;
+        return true;
+    }
+
+    AXP_Int y_int_part = { 0 };
+    AXP_Float y_frac = { 0 };
+    if (!axp_floorf(ctx, y, &y_int_part, &y_frac)) return false;
+    bool y_frac_zero;
+    if (!axp_is_zerof(ctx, &y_frac, &y_frac_zero)) { axp_freei(&y_int_part); axp_freef(&y_frac); return false; }
+    axp_freef(&y_frac);
+
+    if (y_frac_zero) {
+        axp_exp_t y_int = 0;
+        bool overflow = false;
+        for (axp_size_t i = y_int_part.size; i > 0; i--) {
+            if (y_int > (AXP_TYPE_MAX_VALUE(axp_exp_t) - (axp_exp_t)y_int_part.digits[i-1]) / 10) { overflow = true; break; }
+            y_int = y_int * 10 + y_int_part.digits[i-1];
+        }
+        if (overflow) {
+            axp_freei(&y_int_part);
+            axp_throw(ctx, AXP_ERR_OVERFLOW, "Integer exponent too large to represent.");
+            return false;
+        }
+        if (y_int_part.sign) y_int = -y_int;
+        axp_freei(&y_int_part);
+        return axp_powf_ex(ctx, x, y_int, res, precision);
+    }
+    axp_freei(&y_int_part);
+
+    if (x->sign) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "Negative base with non-integer exponent is undefined.");
+        return false;
+    }
+
+    axp_size_t extra = ctx->fast_rounding ? 5 : (ctx->ziv_safety_digits ? ctx->ziv_safety_digits : AXP_ZIV_DEFAULT_SAFETY_DIGITS);
+    axp_size_t max_attempts = ctx->fast_rounding ? 1 : (ctx->ziv_max_retries ? ctx->ziv_max_retries : AXP_ZIV_DEFAULT_MAX_RETRIES);
+
+    for (axp_size_t attempt = 0; attempt < max_attempts; attempt++) {
+        AXP_Float candidate = { 0 };
+        bool ambiguous = false;
+        if (!axp__powff_attempt(ctx, x, y, precision, extra, &candidate, &ambiguous)) return false;
+        if (ctx->fast_rounding || !ambiguous || attempt + 1 == max_attempts) {
+            *res = candidate;
+            if (!axp_reallocf_round(ctx, res, precision)) return false;
+            axp_error_reset(ctx);
+            return true;
+        }
+        axp_freef(&candidate);
+        extra *= 2;
+    }
+    UNREACHABLE("axp_powff_ex retry loop should always return");
     return false;
 }
 

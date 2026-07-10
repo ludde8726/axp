@@ -189,6 +189,9 @@ bool axp_expf_no_splitting(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp
 bool axp_lnf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res);
 bool axp_lnf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision);
 
+bool axp_powff(AXP_Ctx *ctx, AXP_Float *x, const AXP_Float *y, AXP_Float *res);
+bool axp_powff_ex(AXP_Ctx *ctx, AXP_Float *x, const AXP_Float *y, AXP_Float *res, axp_size_t precision);
+
 // Write AXP_Float to string, returns bytes written. If buf is NULL of buf_sz is 0 only the needed space will be returned.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz);
 char *axp_itoa_alloc(AXP_Ctx *ctx, AXP_Int *x);
