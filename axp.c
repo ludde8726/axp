@@ -1601,6 +1601,158 @@ cleanup_error:
     return false;
 }
 
+bool axp_lnf(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res) {
+    return axp_lnf_ex(ctx, x, res, ctx->precision);
+}
+
+static double axp__lnf_seed(const AXP_Float *x) {
+    axp_size_t take = x->size < 17 ? x->size : 17;
+    double mantissa = 0.0;
+    for (axp_size_t i = 0; i < take; i++) {
+        mantissa = mantissa * 10.0 + (double)x->digits[x->size - 1 - i];
+    }
+    axp_exp_t exp_part = x->exponent + (axp_exp_t)(x->size - take);
+    return log(mantissa) + (double)exp_part * log(10.0);
+}
+
+// Note: This function is only used to create a good approximation of logx to start the iterations. 
+// It should never be used on its own.
+static bool axp__double_to_float(AXP_Ctx *ctx, double val, AXP_Float *out) {
+    uint8_t sign = 0;
+    if (val < 0) {
+        sign = 1;
+        val = -val;
+    }
+    if (val == 0.0) {
+        if (!axp_initf_ex(ctx, out, 1)) return false;
+        out->digits[0] = 0;
+        out->size = 1;
+        return true;
+    }
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.17e", val);
+
+    if (!axp_initf_ex(ctx, out, 18)) return false;
+
+    axp_size_t sz = 0;
+    char *scan = buf;
+    while (*scan && *scan != 'e') {
+        if (*scan != '.') out->digits[sz++] = (axp_digit_t)(*scan - '0');
+        scan++;
+    }
+
+    axp_exp_t str_exp = 0;
+    int8_t exp_sign = 1;
+    scan++; // skip 'e'
+    if (*scan == '-') { exp_sign = -1; scan++; }
+    else if (*scan == '+') scan++;
+    while (*scan) str_exp = str_exp * 10 + (*scan++ - '0');
+    str_exp *= exp_sign;
+
+    for (axp_size_t i = 0; i < sz / 2; i++) {
+        axp_digit_t tmp = out->digits[i];
+        out->digits[i] = out->digits[sz - 1 - i];
+        out->digits[sz - 1 - i] = tmp;
+    }
+
+    out->size = sz;
+    out->exponent = str_exp - (axp_exp_t)(sz - 1);
+    out->sign = sign;
+    axp_normalizef(out);
+    return true;
+}
+
+static bool axp__lnf_attempt(AXP_Ctx *ctx, const AXP_Float *x, axp_size_t precision, axp_size_t extra, AXP_Float *out, bool *ambiguous) {
+    axp_size_t guard = 0;
+    axp_size_t tmp_precision = precision;
+    while (tmp_precision) { guard++; tmp_precision /= 10; }
+    axp_size_t workprec = precision + guard + extra;
+
+    AXP_Float y = { 0 };
+    if (!axp__double_to_float(ctx, axp__lnf_seed(x), &y)) return false;
+
+    axp_size_t cur_prec = (workprec < 18) ? workprec : 18;
+    if (!axp_reallocf_round(ctx, &y, cur_prec)) { axp_freef(&y); return false; }
+
+    AXP_Float one = { 0 };
+    if (!axp_initf_ex(ctx, &one, 1)) { axp_freef(&y); return false; }
+    one.digits[0] = 1;
+    one.size = 1;
+
+    while (cur_prec < workprec) {
+        cur_prec = (cur_prec * 2 < workprec) ? cur_prec * 2 : workprec;
+
+        AXP_Float neg_y = { 0 };
+        if (!axp_copyf_exact(ctx, &neg_y, &y)) goto cleanup_error;
+        neg_y.sign = 1 - neg_y.sign;
+
+        AXP_Float exp_neg_y = { 0 };
+        bool ok = axp_expf_ex(ctx, &neg_y, &exp_neg_y, cur_prec);
+        axp_freef(&neg_y);
+        if (!ok) goto cleanup_error;
+
+        AXP_Float term = { 0 };
+        ok = axp_mulf_ex(ctx, x, &exp_neg_y, &term, cur_prec);
+        axp_freef(&exp_neg_y);
+        if (!ok) goto cleanup_error;
+
+        AXP_Float correction = { 0 };
+        ok = axp_subf_ex(ctx, &term, &one, &correction, cur_prec);
+        axp_freef(&term);
+        if (!ok) goto cleanup_error;
+
+        AXP_Float y_next = { 0 };
+        ok = axp_addf_ex(ctx, &y, &correction, &y_next, cur_prec);
+        axp_freef(&correction);
+        if (!ok) goto cleanup_error;
+
+        axp_freef(&y);
+        y = y_next;
+    }
+
+    axp_freef(&one);
+
+    axp_size_t safety = (y.size > precision) ? (y.size - precision) : 0;
+    *ambiguous = !axp__round_is_unambiguous(y.digits, safety);
+    *out = y;
+    axp_error_reset(ctx);
+    return true;
+
+cleanup_error:
+    axp_freef(&y);
+    axp_freef(&one);
+    return false;
+}
+
+bool axp_lnf_ex(AXP_Ctx *ctx, const AXP_Float *x, AXP_Float *res, axp_size_t precision) {
+    bool x_zero;
+    if (!axp_is_zerof(ctx, x, &x_zero)) return false;
+    if (x_zero || x->sign) {
+        axp_throw(ctx, AXP_ERR_DIV_ZERO, "ln of a non-positive number is undefined.");
+        return false;
+    }
+
+    axp_size_t extra = ctx->fast_rounding ? 5 : (ctx->ziv_safety_digits ? ctx->ziv_safety_digits : AXP_ZIV_DEFAULT_SAFETY_DIGITS);
+    axp_size_t max_attempts = ctx->fast_rounding ? 1 : (ctx->ziv_max_retries ? ctx->ziv_max_retries : AXP_ZIV_DEFAULT_MAX_RETRIES);
+
+    for (axp_size_t attempt = 0; attempt < max_attempts; attempt++) {
+        AXP_Float candidate = { 0 };
+        bool ambiguous = false;
+        if (!axp__lnf_attempt(ctx, x, precision, extra, &candidate, &ambiguous)) return false;
+        if (ctx->fast_rounding || !ambiguous || attempt + 1 == max_attempts) {
+            *res = candidate;
+            if (!axp_reallocf_round(ctx, res, precision)) return false;
+            axp_error_reset(ctx);
+            return true;
+        }
+        axp_freef(&candidate);
+        extra *= 2;
+    }
+    UNREACHABLE("axp_lnf_ex retry loop should always return");
+    return false;
+}
+
 // TODO: Should not include null terminator in needed_space.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);

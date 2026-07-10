@@ -115,6 +115,8 @@ axp_expf = AxpFxn("axp_expf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POIN
 
 axp_expf_no_splitting = AxpFxn("axp_expf_no_splitting", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float), axp_size_t)
 
+axp_lnf = AxpFxn("axp_lnf", c_bool, POINTER(AXP_Ctx), POINTER(AXP_Float), POINTER(AXP_Float))
+
 axp_itoa_alloc = AxpFxn("axp_itoa_alloc", c_char_p, POINTER(AXP_Ctx),  POINTER(AXP_Int))
 
 axp_itoa = AxpFxn("axp_itoa", c_size_t, POINTER(AXP_Int), c_void_p, c_size_t)
@@ -319,6 +321,16 @@ def _run_expf(x_str):
   axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
   return actual, expected, f"e^{x_str}"
 
+def _run_lnf(x_str):
+  axp_x = str_to_axpf(x_str)
+  axp_res = AXP_Float()
+  if not axp_lnf(byref(ctx), byref(axp_x), byref(axp_res)): raise Exception(axp_strerror(byref(ctx)))
+  result_str = str(axp_res)
+  expected = _correctly_rounded(lambda: Decimal(x_str).ln(), ctx.precision)
+  actual = Decimal(result_str)
+  axp_freef(byref(axp_x)); axp_freef(byref(axp_res))
+  return actual, expected, f"ln({x_str})"
+
 # Input generators
 
 def _gen_binary(bits):
@@ -455,25 +467,25 @@ def _run_prev_failed(results: TestResults, run_ops_by_name):
     print(f"{name}: {GREEN}Success{RESET} ({len(cases)} cases)")
 
 TESTS = [
-  ("Random Integer Add",     100_000,     _gen_binary(100),                 _run_add),
-  ("Random Integer Sub",     100_000,     _gen_binary(100),                 _run_sub),
-  ("Random Integer Mul",     100_000,     _gen_binary(100),                 _run_mul),
-  ("Random Integer Div",     100_000,     _gen_div(100),                    _run_div),
-  ("Random Integer Pow",     100_000,     _gen_pow(3, 20),                  _run_pow),
-  ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),              _run_pow),
-  ("Random Float Add",       100_000,     _gen_binary_float(50, 30),        _run_addf),
-  ("Random Float Sub",       100_000,     _gen_binary_float(50, 30),        _run_subf),
-  ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),        _run_mulf),
-  ("Random Float Div",       100_000,     _gen_binary_float(50, 30),        _run_divf),
-  ("Random Float Pow",       100_000,      _gen_powf(5, 30, 1000),            _run_powf),
-  ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],_run_e_check),
-  ("Random Exp",             100_000,      lambda: [gen_randomf(3, 2)],_run_expf,    False), # Skip for now since it does not work...
+  ("Random Integer Add",     100_000,     _gen_binary(100),                           _run_add),
+  ("Random Integer Sub",     100_000,     _gen_binary(100),                           _run_sub),
+  ("Random Integer Mul",     100_000,     _gen_binary(100),                           _run_mul),
+  ("Random Integer Div",     100_000,     _gen_div(100),                              _run_div),
+  ("Random Integer Pow",     100_000,     _gen_pow(3, 20),                            _run_pow),
+  ("Big Random Integer Pow", 250,         _gen_big_pow(14, 3),                        _run_pow),
+  ("Random Float Add",       100_000,     _gen_binary_float(50, 30),                  _run_addf),
+  ("Random Float Sub",       100_000,     _gen_binary_float(50, 30),                  _run_subf),
+  ("Random Float Mul",       100_000,     _gen_binary_float(50, 30),                  _run_mulf),
+  ("Random Float Div",       100_000,     _gen_binary_float(50, 30),                  _run_divf),
+  ("Random Float Pow",       100_000,     _gen_powf(5, 30, 1000),                     _run_powf),
+  ("E to random Precision",  250,         lambda: [random.randint(1, 1000)],          _run_e_check),
+  ("Random Exp",             100_000,     lambda: [gen_randomf(3, 2)],                _run_expf),
+  ("Random Ln",              100_000,     lambda: [gen_randomf(5, 30, only_pos=True)],_run_lnf),
 ]
 
 RUN_OPS_BY_NAME = {t[0]: t[3] for t in TESTS}
 
 def run_all_tests() -> TestResults:
-  ctx.fast_rounding = False
   results = TestResults()
 
   _run_prev_failed(results, RUN_OPS_BY_NAME)
