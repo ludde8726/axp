@@ -1,4 +1,5 @@
 build/
+__pycache__/
 testing.c
 *.dSYM
 .vscode/
@@ -10,3 +11,4 @@ test_runner.py
 from_arg.c
 test_log.txt
 needed_changes_for_base_change.txt
+notes/

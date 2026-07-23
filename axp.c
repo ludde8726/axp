@@ -1873,10 +1873,9 @@ bool axp_powff_ex(AXP_Ctx *ctx, AXP_Float *x, const AXP_Float *y, AXP_Float *res
     return false;
 }
 
-// TODO: Should not include null terminator in needed_space.
 size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
     bool should_write = !(buf == NULL || buf_sz == 0);
-    size_t needed_space = x->size ? x->size + 1 : 2;
+    size_t needed_space = x->size ? x->size : 1;
     if (x->sign) needed_space++;
     if (!should_write) return needed_space;
 
@@ -1889,7 +1888,7 @@ size_t axp_itoa(AXP_Int *x, char *buf, size_t buf_sz) {
 }
 
 char *axp_itoa_alloc(AXP_Ctx *ctx, AXP_Int *x) {
-    size_t needed_space = axp_itoa(x, NULL, 0);
+    size_t needed_space = axp_itoa(x, NULL, 0) + 1; // +1 for the null terminator
     char *buf = malloc(needed_space * sizeof(char));
     if (!buf) {
         axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_itoa_alloc`.", needed_space*sizeof(char));
@@ -1963,17 +1962,45 @@ bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x)
     return true;
 }
 
-// TODO: Should not include null terminator in needed_space.
-size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
+static bool axp__ftoa_use_scientific(const AXP_Float *x) {
+    if (x->exponent >= 0) return x->exponent > AXP_FTOA_AUTO_PAD_THRESHOLD;
+    if (x->size + x->exponent <= 0) return llabs(x->size + x->exponent) > AXP_FTOA_AUTO_PAD_THRESHOLD;
+    return false;
+}
+
+size_t axp_ftoa_ex(AXP_Float *x, char *buf, size_t buf_sz, AXP_FtoaFormat format) {
     bool should_write = !(buf == NULL || buf_sz == 0);
     size_t needed_space = 0;
 
     if (x->size == 0 || ((x->size == 1) && (x->digits[0] == 0))) {
         if (should_write) snprintf(buf, 4, "0.0");
-        needed_space = 4;
+        needed_space = 3;
+        goto return_block;
+    } else if (format == AXP_FTOA_SCIENTIFIC || (format == AXP_FTOA_AUTO && axp__ftoa_use_scientific(x))) {
+        axp_exp_t top_exp = x->exponent + (axp_exp_t)(x->size - 1);
+        char exp_buf[32];
+        int exp_len = snprintf(exp_buf, sizeof(exp_buf), "%+lld", (long long)top_exp);
+        size_t frac_len = (x->size > 1) ? (x->size - 1) : 1;
+
+        needed_space = frac_len + (size_t)exp_len + 3; // digit + '.' + 'e'
+        if (x->sign) needed_space++;
+        if (!should_write) return needed_space;
+
+        if (x->sign) *buf++ = '-';
+        *buf++ = '0' + x->digits[x->size - 1];
+        *buf++ = '.';
+        if (x->size > 1) {
+            for (axp_size_t i = x->size - 1; i > 0; i--) *buf++ = '0' + x->digits[i-1];
+        } else {
+            *buf++ = '0';
+        }
+        *buf++ = 'e';
+        memcpy(buf, exp_buf, (size_t)exp_len);
+        buf += exp_len;
+        *buf = '\0';
         goto return_block;
     } else if (x->exponent >= 0) {
-        needed_space = (size_t)x->exponent + 3; // space for .0\0
+        needed_space = (size_t)x->exponent + 2; // space for .0
         if (x->sign) needed_space++;
         needed_space += x->size;
         if (!should_write) return needed_space;
@@ -1991,7 +2018,7 @@ size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
 
     } else if (x->size + x->exponent <= 0) {
         size_t leading_zeroes = (size_t)llabs(x->size + x->exponent);
-        needed_space = leading_zeroes + 3; // 0. ... \0
+        needed_space = leading_zeroes + 2; // 0. ...
         if (x->sign) needed_space++;
         needed_space += x->size;
 
@@ -2006,7 +2033,7 @@ size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
         goto return_block;
 
     } else {
-        needed_space = 2; // ... . ... \0
+        needed_space = 1; // ... . ...
         if (x->sign) needed_space++;
         needed_space += x->size;
 
@@ -2026,8 +2053,12 @@ return_block:
     return needed_space;
 }
 
+size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz) {
+    return axp_ftoa_ex(x, buf, buf_sz, AXP_FTOA_AUTO);
+}
+
 char *axp_ftoa_alloc(AXP_Ctx *ctx, AXP_Float *x) {
-    size_t needed_space = axp_ftoa(x, NULL, 0);
+    size_t needed_space = axp_ftoa(x, NULL, 0) + 1; // +1 for the null terminator
     char *buf = malloc(needed_space * sizeof(char));
     if (!buf) {
         axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp_ftoa_alloc`.", needed_space*sizeof(char));
@@ -2038,7 +2069,6 @@ char *axp_ftoa_alloc(AXP_Ctx *ctx, AXP_Float *x) {
     return buf;
 }
 
-// TODO: Parsing just '0' fails.
 bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
     if (!str || !*str) {
         axp_throw(ctx, AXP_ERR_PARSE, "Could not parse empty string or null pointer as float.");
@@ -2061,7 +2091,7 @@ bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
     const char *start = NULL;
     bool leading = true;
     bool truncated = false;
-
+    bool saw_digit = false;
 
     int64_t digit_count = 0;
     int64_t dot_pos = -1;
@@ -2074,36 +2104,33 @@ bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
         if (*scan == '.') {
             if (dot_pos != -1) {
                 axp_throw(ctx, AXP_ERR_PARSE, "Multiple decimal points in float string.");
-                axp_freef(x);
-                return false;
+                goto cleanup_error;
             }
             if (!start) start = scan;
             dot_pos = digit_count;
         } else if (!start) {
-            if (*scan == '0') scan++;
+            if (*scan == '0') { saw_digit = true; scan++; }
             else if(isdigit(*scan)) {
                 start = scan;
+                saw_digit = true;
                 digit_count++;
                 scan++;
             } else if (isspace(*scan)) scan++;
             else {
                 axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", *scan);
-                axp_freef(x);
-                return false;
+                goto cleanup_error;
             }
             continue;
-        } else if (isdigit(*scan)) digit_count++;
+        } else if (isdigit(*scan)) { saw_digit = true; digit_count++; }
         else if (!isspace(*scan)) {
             axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", *scan);
-            axp_freef(x);
-            return false;
+            goto cleanup_error;
         }
         scan++;
     }
-    if (digit_count == 0) {
+    if (!saw_digit) {
         axp_throw(ctx, AXP_ERR_PARSE, "No digits found in float string.");
-        axp_freef(x);
-        return false;
+        goto cleanup_error;
     }
     if (dot_pos == -1) dot_pos = digit_count;
 
@@ -2111,46 +2138,55 @@ bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
     if (*scan == 'e' || *scan == 'E') {
         scan++;
         int8_t exp_sign = 1;
-        if (*scan == '-') { 
-            exp_sign = -1; 
-            scan++; 
+        if (*scan == '-') {
+            exp_sign = -1;
+            scan++;
         } else if (*scan == '+') scan++;
 
         if (!isdigit(*scan)) {
             axp_throw(ctx, AXP_ERR_PARSE, "Expected exponent digits after 'e'/'E'.");
-            axp_freef(x);
-            return false;
+            goto cleanup_error;
         }
         while (isdigit(*scan)) str_exp = str_exp * 10 + (*scan++ - '0');
         str_exp *= exp_sign;
     }
 
-    while (*start && *start != 'e' && *start != 'E') {
-        const char chr = *start++;
+    if (start) {
+        while (*start && *start != 'e' && *start != 'E') {
+            const char chr = *start++;
 
-        if (isspace(chr)) continue;
-        if (chr == '.')  continue;
-        if (!isdigit(chr)) {
-            axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", chr);
-            axp_freef(x);
-            return false;
-        }
-        axp_digit_t d = (axp_digit_t)(chr - '0');
-        if (leading && d == 0) {
-            zeroes_after_dot += 1;
-            continue;
-        }
-        leading = false;
+            if (isspace(chr)) continue;
+            if (chr == '.')  continue;
+            if (!isdigit(chr)) {
+                axp_throw(ctx, AXP_ERR_PARSE, "String parsing failed, could not parse '%c' as a digit", chr);
+                goto cleanup_error;
+            }
+            axp_digit_t d = (axp_digit_t)(chr - '0');
+            if (leading && d == 0) {
+                zeroes_after_dot += 1;
+                continue;
+            }
+            leading = false;
 
-        if (res_sz < precision) {
-            x->digits[precision - res_sz - 1] = d;
-            res_sz++;
-        } else {
-            if (!truncated) {
-                first_dropped = d;
-                truncated = true;
+            if (res_sz < precision) {
+                x->digits[precision - res_sz - 1] = d;
+                res_sz++;
+            } else {
+                if (!truncated) {
+                    first_dropped = d;
+                    truncated = true;
+                }
             }
         }
+    }
+
+    if (res_sz == 0) {
+        x->sign = sign;
+        x->digits[0] = 0;
+        x->size = 1;
+        x->exponent = 0;
+        axp_error_reset(ctx);
+        return true;
     }
 
     if (res_sz < precision) memmove(x->digits, x->digits + (precision - res_sz), res_sz * sizeof(axp_digit_t));
@@ -2177,8 +2213,16 @@ bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x) {
     x->size = res_sz;
     x->exponent = -digit_count + dot_pos + str_exp;
     if (truncated) x->exponent += (digit_count - res_sz) - zeroes_after_dot;
+    axp_normalizef(x);
     axp_error_reset(ctx);
     return true;
+
+cleanup_error:
+    axp_freef(x);
+    x->digits = NULL;
+    x->size = 0;
+    x->capacity = 0;
+    return false;
 }
 
 void axp_throw(AXP_Ctx *ctx, AXP_ErrorCode err_code, const char *fmt, ...) {
@@ -2298,13 +2342,13 @@ int axp__printf_core(AXP_Ctx *ctx, axp__print_target *target, const char *fmt, v
         if (*chr == 'Z') {
             AXP_Int arg = va_arg(*args, AXP_Int);
             size_t needed_space = axp_itoa(&arg, NULL, 0);
-            char *tmp_buf = malloc(needed_space * sizeof(char));
+            char *tmp_buf = malloc((needed_space + 1) * sizeof(char));
             if (!tmp_buf) {
-                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", needed_space*sizeof(char));
+                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", (needed_space+1)*sizeof(char));
                 return -1;
             }
-            axp_itoa(&arg, tmp_buf, needed_space);
-            _WRITE_STR(tmp_buf, needed_space - 1);
+            axp_itoa(&arg, tmp_buf, needed_space + 1);
+            _WRITE_STR(tmp_buf, needed_space);
             free(tmp_buf);
             if (write_failed) return -1;
             chr++;
@@ -2312,13 +2356,13 @@ int axp__printf_core(AXP_Ctx *ctx, axp__print_target *target, const char *fmt, v
         } else if (*chr == 'R') {
             AXP_Float arg = va_arg(*args, AXP_Float);
             size_t needed_space = axp_ftoa(&arg, NULL, 0);
-            char *tmp_buf = malloc(needed_space * sizeof(char));
+            char *tmp_buf = malloc((needed_space + 1) * sizeof(char));
             if (!tmp_buf) {
-                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", needed_space*sizeof(char));
+                axp_throw(ctx, AXP_ERR_ALLOC, "Memory allocation failed, could not allocate %lu bytes in `axp__printf_core`.", (needed_space+1)*sizeof(char));
                 return -1;
             }
-            axp_ftoa(&arg, tmp_buf, needed_space);
-            _WRITE_STR(tmp_buf, needed_space - 1);
+            axp_ftoa(&arg, tmp_buf, needed_space + 1);
+            _WRITE_STR(tmp_buf, needed_space);
             free(tmp_buf);
             if (write_failed) return -1;
             chr++;

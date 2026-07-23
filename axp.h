@@ -65,6 +65,14 @@ typedef struct {
     axp_exp_t exponent;
 } AXP_Float; // Number is represented as value = digits * 10^exp note that digits is an integer not a float so 1.23 would be represented as 123 * 10^-2
 
+#define AXP_FTOA_AUTO_PAD_THRESHOLD 6
+
+typedef enum {
+    AXP_FTOA_REGULAR,
+    AXP_FTOA_SCIENTIFIC,
+    AXP_FTOA_AUTO,
+} AXP_FtoaFormat;
+
 typedef int (*axp__print_writer_fn)(AXP_Ctx *, void *, const char *, size_t, int *);
 
 typedef enum {
@@ -198,6 +206,7 @@ char *axp_itoa_alloc(AXP_Ctx *ctx, AXP_Int *x);
 bool axp_atoi(AXP_Ctx *ctx, const char *str, AXP_Int *x);
 
 size_t axp_ftoa(AXP_Float *x, char *buf, size_t buf_sz);
+size_t axp_ftoa_ex(AXP_Float *x, char *buf, size_t buf_sz, AXP_FtoaFormat format);
 char *axp_ftoa_alloc(AXP_Ctx *ctx, AXP_Float *x);
 bool axp_atof(AXP_Ctx *ctx, const char *str, AXP_Float *x);
 
